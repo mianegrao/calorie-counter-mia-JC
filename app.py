@@ -13,10 +13,10 @@ if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 2. Ligar ao Google Sheets (Histórico)
+# 2. Ligar ao Google Sheets (Base de Dados)
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 3. Carregar Base de Alimentos (do Excel no GitHub)
+# 3. Carregar Base de Alimentos (Excel do GitHub)
 @st.cache_data
 def load_food_data():
     try:
@@ -32,14 +32,14 @@ def load_food_data():
 df_alimentos = load_food_data()
 
 # --- INTERFACE ---
-st.title("🍎 Nutri Control Profissional")
+st.title("🍎 Nutri Control")
 
 # Barra Lateral
-st.sidebar.header("Painel de Controlo")
+st.sidebar.header("Definições")
 user = st.sidebar.radio("Utilizador:", ["Mia", "João Carlos"])
-data_sel = st.sidebar.date_input("Data:", date.today())
+data_sel = st.sidebar.date_input("Data Selecionada:", date.today())
 
-tabs = st.tabs(["📝 Registar", "📸 Foto/IA", "📅 Histórico Real"])
+tabs = st.tabs(["📝 Registar", "📸 Foto/IA", "📅 Histórico Diário"])
 
 # ABA 1: REGISTO
 with tabs[0]:
@@ -50,19 +50,18 @@ with tabs[0]:
         qtd = st.number_input("Quantidade (g ou ml):", min_value=1.0, value=100.0)
         fator = qtd / 100
         
-        # Preparar dados para gravar
+        # Cálculos
         v_kcal = row['Calorias'] * fator
         v_prot = row['Proteína'] * fator
         v_hid = row['Hidratos'] * fator
         v_lip = row['Lípidos'] * fator
-        v_acucar = row['(açúcar)'] * fator
-        v_fibra = row['Fibras'] * fator
-        v_sal = row['Sal'] * fator
+        v_acucar = row.get('(açúcar)', 0) * fator
+        v_fibra = row.get('Fibras', 0) * fator
+        v_sal = row.get('Sal', 0) * fator
         
-        st.metric("Calorias", f"{v_kcal:.1f} kcal")
+        st.metric("Energia Estimada", f"{v_kcal:.1f} kcal")
         
-        if st.button("Confirmar e Gravar no Histórico"):
-            # Criar linha para o Google Sheets
+        if st.button("Confirmar e Gravar"):
             novo_registo = pd.DataFrame([{
                 "Data": data_sel.strftime("%Y-%m-%d"),
                 "Utilizador": user,
@@ -76,44 +75,19 @@ with tabs[0]:
                 "Sal": round(v_sal, 2)
             }])
             
-            # Ler dados atuais, juntar novo e gravar
             try:
-                dados_atuais = conn.read()
-                df_final = pd.concat([dados_atuais, novo_registo], ignore_index=True)
+                # Tenta ler o histórico atual
+                try:
+                    historico_atual = conn.read()
+                    if historico_atual is None or historico_atual.empty:
+                        df_final = novo_registo
+                    else:
+                        df_final = pd.concat([historico_atual, novo_registo], ignore_index=True)
+                except:
+                    df_final = novo_registo
+                
+                # Atualiza a folha
                 conn.update(data=df_final)
-                st.success("Gravado com sucesso no Google Sheets!")
-                st.cache_data.clear() # Limpa cache para atualizar histórico
+                st.success("✅ Registado no Google Sheets!")
+                st.cache_data.clear() # Força a atualização do separador Histórico
             except Exception as e:
-                st.error(f"Erro ao gravar: {e}")
-
-# ABA 2: FOTO / IA
-with tabs[1]:
-    st.subheader("Analisar Rótulo")
-    foto = st.camera_input("Foto da tabela nutricional")
-    if foto:
-        img = Image.open(foto)
-        with st.spinner("IA a analisar..."):
-            prompt = "Lê a tabela nutricional e diz os valores por 100g: Calorias, Proteína, Hidratos, Açúcar, Lípidos, Fibras e Sal."
-            res = model.generate_content([prompt, img])
-            st.write(res.text)
-
-# ABA 3: HISTÓRICO
-with tabs[2]:
-    st.subheader(f"Registos de {user}")
-    try:
-        historico_completo = conn.read()
-        if not historico_completo.empty:
-            # Filtrar por data e utilizador
-            historico_completo['Data'] = historico_completo['Data'].astype(str)
-            filtro = historico_completo[
-                (historico_completo['Data'] == data_sel.strftime("%Y-%m-%d")) & 
-                (historico_completo['Utilizador'] == user)
-            ]
-            
-            if not filtro.empty:
-                st.dataframe(filtro)
-                st.metric("Total Calorias do Dia", f"{filtro['Kcal'].sum():.1f} kcal")
-            else:
-                st.info("Sem registos para este dia.")
-    except:
-        st.write("Ainda não existem dados no Google Sheets.")
