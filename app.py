@@ -3,21 +3,22 @@ import pandas as pd
 import google.generativeai as genai
 from PIL import Image
 from datetime import date
-import os
+from streamlit_gsheets import GSheetsConnection
 
-# Configuração da Página
-st.set_page_config(page_title="Nutri Control Mia & JC", page_icon="🍎")
+# --- CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(page_title="Nutri Control Mia & JC", layout="wide", page_icon="🍎")
 
 # 1. Configurar Gemini (IA)
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model = genai.GenerativeModel('gemini-1.5-flash')
-else:
-    st.error("Chave API não configurada nos Secrets do Streamlit!")
 
-# 2. Funções de Dados
+# 2. Ligar ao Google Sheets (Histórico)
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+# 3. Carregar Base de Alimentos (do Excel no GitHub)
 @st.cache_data
-def load_data():
+def load_food_data():
     try:
         df = pd.read_excel("alimentos.xlsx", sheet_name="Valor nutricional")
         cols = ['Proteína', 'Hidratos', '(açúcar)', 'Lípidos', 'Fibras', 'Sal', 'Calorias']
@@ -25,79 +26,94 @@ def load_data():
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         return df
-    except Exception as e:
-        st.error(f"Erro ao ler alimentos.xlsx: {e}")
+    except:
         return pd.DataFrame()
 
-def guardar_registo(utilizador, alimento, kcal, prot, hid, gord, data_sel):
-    novo_dado = pd.DataFrame([{
-        "Data": data_sel,
-        "Utilizador": utilizador,
-        "Alimento": alimento,
-        "Kcal": kcal,
-        "Proteína": prot,
-        "Hidratos": hid,
-        "Gordura": gord
-    }])
-    # Nota: O Streamlit Cloud tem limitações a escrever ficheiros no GitHub diretamente.
-    # Para uso imediato, vamos usar o estado da sessão (session_state).
-    if 'historico' not in st.session_state:
-        st.session_state.historico = pd.DataFrame()
-    st.session_state.historico = pd.concat([st.session_state.historico, novo_dado], ignore_index=True)
+df_alimentos = load_food_data()
 
-# Interface
-st.title("🍎 Nutri Control")
+# --- INTERFACE ---
+st.title("🍎 Nutri Control Profissional")
+
+# Barra Lateral
+st.sidebar.header("Painel de Controlo")
 user = st.sidebar.radio("Utilizador:", ["Mia", "João Carlos"])
-data_escolhida = st.sidebar.date_input("Selecionar Dia:", date.today())
+data_sel = st.sidebar.date_input("Data:", date.today())
 
-df_alimentos = load_data()
+tabs = st.tabs(["📝 Registar", "📸 Foto/IA", "📅 Histórico Real"])
 
-# --- ABAS ---
-tab1, tab2, tab3 = st.tabs(["📝 Registar", "📸 Foto/IA", "📅 Histórico"])
-
-with tab1:
+# ABA 1: REGISTO
+with tabs[0]:
     if not df_alimentos.empty:
-        alimento_nome = st.selectbox("Escolha o alimento:", df_alimentos['ALIMENTO'].unique())
-        row = df_alimentos[df_alimentos['ALIMENTO'] == alimento_nome].iloc[0]
+        alimento = st.selectbox("O que comeste?", df_alimentos['ALIMENTO'].unique())
+        row = df_alimentos[df_alimentos['ALIMENTO'] == alimento].iloc[0]
         
         qtd = st.number_input("Quantidade (g ou ml):", min_value=1.0, value=100.0)
         fator = qtd / 100
         
-        c1, c2, c3 = st.columns(3)
+        # Preparar dados para gravar
         v_kcal = row['Calorias'] * fator
         v_prot = row['Proteína'] * fator
         v_hid = row['Hidratos'] * fator
-        v_gord = row['Lípidos'] * fator
+        v_lip = row['Lípidos'] * fator
+        v_acucar = row['(açúcar)'] * fator
+        v_fibra = row['Fibras'] * fator
+        v_sal = row['Sal'] * fator
         
-        c1.metric("Energia", f"{v_kcal:.1f} kcal")
-        c2.metric("Proteína", f"{v_prot:.1f} g")
-        c3.metric("Hidratos", f"{v_hid:.1f} g")
+        st.metric("Calorias", f"{v_kcal:.1f} kcal")
         
-        if st.button("Confirmar Registo"):
-            guardar_registo(user, alimento_nome, v_kcal, v_prot, v_hid, v_gord, data_escolhida)
-            st.success(f"Registo guardado para o dia {data_escolhida}!")
+        if st.button("Confirmar e Gravar no Histórico"):
+            # Criar linha para o Google Sheets
+            novo_registo = pd.DataFrame([{
+                "Data": data_sel.strftime("%Y-%m-%d"),
+                "Utilizador": user,
+                "Alimento": alimento,
+                "Kcal": round(v_kcal, 1),
+                "Proteina": round(v_prot, 1),
+                "Hidratos": round(v_hid, 1),
+                "Acucar": round(v_acucar, 1),
+                "Lipidos": round(v_lip, 1),
+                "Fibras": round(v_fibra, 1),
+                "Sal": round(v_sal, 2)
+            }])
+            
+            # Ler dados atuais, juntar novo e gravar
+            try:
+                dados_atuais = conn.read()
+                df_final = pd.concat([dados_atuais, novo_registo], ignore_index=True)
+                conn.update(data=df_final)
+                st.success("Gravado com sucesso no Google Sheets!")
+                st.cache_data.clear() # Limpa cache para atualizar histórico
+            except Exception as e:
+                st.error(f"Erro ao gravar: {e}")
 
-with tab2:
-    st.subheader("Adicionar por Foto (Gemini)")
-    foto = st.camera_input("Tire foto ao rótulo")
+# ABA 2: FOTO / IA
+with tabs[1]:
+    st.subheader("Analisar Rótulo")
+    foto = st.camera_input("Foto da tabela nutricional")
     if foto:
         img = Image.open(foto)
-        with st.spinner("A analisar..."):
-            prompt = "Extrai os valores nutricionais por 100g desta imagem: Calorias, Proteína, Hidratos, Lípidos. Responde de forma curta."
-            response = model.generate_content([prompt, img])
-            st.write(response.text)
-            st.info("Dica: Use estes valores para adicionar um novo item ao seu Excel no computador.")
+        with st.spinner("IA a analisar..."):
+            prompt = "Lê a tabela nutricional e diz os valores por 100g: Calorias, Proteína, Hidratos, Açúcar, Lípidos, Fibras e Sal."
+            res = model.generate_content([prompt, img])
+            st.write(res.text)
 
-with tab3:
-    st.subheader(f"Registo de {user}")
-    if 'historico' in st.session_state and not st.session_state.historico.empty:
-        hist = st.session_state.historico
-        # Filtrar por utilizador e data
-        filtro = hist[(hist['Utilizador'] == user) & (hist['Data'] == data_escolhida)]
-        if not filtro.empty:
-            st.dataframe(filtro)
-            st.metric("Total Calorias do Dia", f"{filtro['Kcal'].sum():.1f} kcal")
-        else:
-            st.write("Sem registos para este dia.")
-    else:
-        st.write("O histórico está vazio.")
+# ABA 3: HISTÓRICO
+with tabs[2]:
+    st.subheader(f"Registos de {user}")
+    try:
+        historico_completo = conn.read()
+        if not historico_completo.empty:
+            # Filtrar por data e utilizador
+            historico_completo['Data'] = historico_completo['Data'].astype(str)
+            filtro = historico_completo[
+                (historico_completo['Data'] == data_sel.strftime("%Y-%m-%d")) & 
+                (historico_completo['Utilizador'] == user)
+            ]
+            
+            if not filtro.empty:
+                st.dataframe(filtro)
+                st.metric("Total Calorias do Dia", f"{filtro['Kcal'].sum():.1f} kcal")
+            else:
+                st.info("Sem registos para este dia.")
+    except:
+        st.write("Ainda não existem dados no Google Sheets.")
