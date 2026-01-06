@@ -91,3 +91,39 @@ with tabs[0]:
                 st.success("✅ Registado no Google Sheets!")
                 st.cache_data.clear() # Força a atualização do separador Histórico
             except Exception as e:
+                st.error(f"Erro ao gravar: {e}")
+
+# ABA 2: FOTO / IA
+with tabs[1]:
+    st.subheader("Analisar Rótulo")
+    foto = st.camera_input("Tirar foto")
+    if foto:
+        img = Image.open(foto)
+        with st.spinner("IA a analisar..."):
+            prompt = "Lê a tabela nutricional e diz os valores por 100g: Calorias, Proteína, Hidratos, Açúcar, Lípidos, Fibras e Sal."
+            res = model.generate_content([prompt, img])
+            st.write(res.text)
+
+# ABA 3: HISTÓRICO
+with tabs[2]:
+    st.subheader(f"Diário de {user} - {data_sel}")
+    try:
+        # Lê sempre a versão mais recente
+        df_historico = conn.read()
+        if df_historico is not None and not df_historico.empty:
+            # Garantir que a coluna Data é string para o filtro
+            df_historico['Data'] = df_historico['Data'].astype(str)
+            dia_str = data_sel.strftime("%Y-%m-%d")
+            
+            filtro = df_historico[(df_historico['Data'] == dia_str) & (df_historico['Utilizador'] == user)]
+            
+            if not filtro.empty:
+                st.dataframe(filtro)
+                st.metric("Total de Calorias", f"{filtro['Kcal'].sum():.1f} kcal")
+                st.metric("Total de Proteína", f"{filtro['Proteina'].sum():.1f} g")
+            else:
+                st.info("Ainda não tens registos para este dia.")
+        else:
+            st.info("O histórico está totalmente vazio.")
+    except Exception as e:
+        st.error(f"Não foi possível carregar o histórico: {e}")
