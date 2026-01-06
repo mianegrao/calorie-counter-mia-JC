@@ -16,7 +16,7 @@ if "GEMINI_API_KEY" in st.secrets:
 # 2. Conexão Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 3. Carregar Base de Alimentos (Excel GitHub)
+# 3. Carregar Base de Alimentos
 @st.cache_data(ttl=600)
 def load_food_data():
     try:
@@ -28,28 +28,42 @@ def load_food_data():
 
 df_alimentos = load_food_data()
 
+# --- LÓGICA DE LINK PERSONALIZADO (URL PARAMS) ---
+# Lê o utilizador a partir do link (ex: ?user=Joao)
+query_params = st.query_params
+user_no_link = query_params.get("user", "Mia") # "Mia" é o padrão se o link for o normal
+
+# Mapeamento para garantir que o nome no link bate com a lista
+lista_utilizadores = ["Mia", "João Carlos", "Jorge", "Celeste"]
+default_index = 0
+
+if user_no_link.lower() in ["joao", "joão", "joão carlos"]:
+    default_index = 1
+elif user_no_link.lower() == "jorge":
+    default_index = 2
+elif user_no_link.lower() == "celeste":
+    default_index = 3
+
 # --- NAVEGAÇÃO LATERAL ---
 st.sidebar.title("🍎 Nutri & Fit Pro")
 page = st.sidebar.selectbox("Ir para:", 
     ["Página Inicial / Registo", "Estatísticas & Médias", "Registo de Exercício", "Câmara IA"])
 
-user = st.sidebar.selectbox("Utilizador:", ["Mia", "João Carlos", "Jorge", "Celeste"])
+# O selectbox agora usa o 'index' definido pelo link
+user = st.sidebar.selectbox("Utilizador:", lista_utilizadores, index=default_index)
 data_sel = st.sidebar.date_input("Data de referência:", date.today())
 
 # --- FUNÇÃO PARA LER DADOS ---
 def get_data(worksheet_name="Sheet1"):
     try:
         df = conn.read(worksheet=worksheet_name, ttl=0)
-        if df is not None:
-            return df.dropna(how='all')
-        return pd.DataFrame()
+        return df.dropna(how='all') if df is not None else pd.DataFrame()
     except:
         return pd.DataFrame()
 
 # --- PÁGINA 1: REGISTO E TOTAIS ---
 if page == "Página Inicial / Registo":
     st.header(f"📝 Diário de {user}")
-    
     col1, col2 = st.columns([1, 1])
     
     with col1:
@@ -73,8 +87,7 @@ if page == "Página Inicial / Registo":
                 "Fibras": get_v(['Fibras']),
                 "Sal": get_v(['Sal'])
             }
-
-            st.info(f"Cálculo atual: {vals['Kcal']:.1f} kcal | {vals['Proteina']:.1f}g Prot")
+            st.info(f"Cálculo: {vals['Kcal']:.1f} kcal | {vals['Proteina']:.1f}g Prot")
 
             if st.button("CONFIRMAR E GRAVAR"):
                 try:
@@ -96,29 +109,21 @@ if page == "Página Inicial / Registo":
         if not df_h.empty:
             df_h['Data'] = df_h['Data'].astype(str)
             dia_df = df_h[(df_h['Data'] == str(data_sel)) & (df_h['Utilizador'] == user)]
-            
             if not dia_df.empty:
-                st.dataframe(dia_df[["Alimento", "Kcal", "Proteina", "Hidratos", "Lipidos"]], use_container_width=True)
-                m1, m2, m3, m4 = st.columns(4)
+                st.dataframe(dia_df[["Alimento", "Kcal", "Proteina", "Hidratos"]], use_container_width=True)
+                m1, m2, m3 = st.columns(3)
                 m1.metric("Energia", f"{dia_df['Kcal'].sum():.0f} kcal")
                 m2.metric("Proteína", f"{dia_df['Proteina'].sum():.1f}g")
                 m3.metric("Hidratos", f"{dia_df['Hidratos'].sum():.1f}g")
-                m4.metric("Lípidos", f"{dia_df['Lipidos'].sum():.1f}g")
-
-                if st.button("🗑️ Apagar último registo"):
+                if st.button("🗑️ Apagar último"):
                     df_res = df_h.drop(dia_df.index[-1])
                     conn.update(data=df_res)
                     st.rerun()
-            else:
-                st.info("Sem registos hoje.")
 
-# --- PÁGINA 2: ESTATÍSTICAS & MÉDIAS ---
+# --- PÁGINA 2: ESTATÍSTICAS ---
 elif page == "Estatísticas & Médias":
     st.header(f"📊 Análise Global - {user}")
-    
-    # 1. Obter dados de Alimentação
     df_h = get_data("Sheet1")
-    # 2. Obter dados de Exercício
     df_ex = get_data("Exercicio")
     
     if not df_h.empty:
@@ -127,12 +132,10 @@ elif page == "Estatísticas & Médias":
         df_u = df_h[df_h['Utilizador'] == user]
         
         if not df_u.empty:
-            # Agrupar alimentação por dia
             diario_nutri = df_u.groupby('Data').agg({
                 'Kcal': 'sum', 'Proteina': 'sum', 'Hidratos': 'sum', 'Acucar': 'sum', 'Fibras': 'sum'
             }).sort_index()
 
-            # Processar Exercício para o utilizador
             if not df_ex.empty:
                 df_ex['Data'] = pd.to_datetime(df_ex['Data'], errors='coerce')
                 df_ex_u = df_ex[df_ex['Utilizador'] == user]
@@ -140,60 +143,42 @@ elif page == "Estatísticas & Médias":
             else:
                 diario_ex = pd.DataFrame(columns=['Duracao'])
 
-            # Função para mostrar métricas incluindo Exercício
-            def mostrar_resumo(titulo, df_nutri_sub, df_ex_sub):
+            def mostrar_resumo(titulo, df_n, df_e):
                 st.markdown(f"### {titulo}")
                 c1, c2, c3, c4, c5, c6 = st.columns(6)
-                c1.metric("Energia", f"{df_nutri_sub['Kcal'].mean():.0f} kcal")
-                c2.metric("Prot.", f"{df_nutri_sub['Proteina'].mean():.1f}g")
-                c3.metric("Hidr.", f"{df_nutri_sub['Hidratos'].mean():.1f}g")
-                c4.metric("Açúcar", f"{df_nutri_sub['Acucar'].mean():.1f}g")
-                c5.metric("Fibras", f"{df_nutri_sub['Fibras'].mean():.1f}g")
-                
-                # Média de exercício para os dias em que houve treino
-                avg_ex = df_ex_sub['Duracao'].mean() if not df_ex_sub.empty else 0
-                c6.metric("🏋️ Treino", f"{avg_ex:.0f} min", delta_color="normal")
+                c1.metric("Energia", f"{df_n['Kcal'].mean():.0f} kcal")
+                c2.metric("Prot.", f"{df_n['Proteina'].mean():.1f}g")
+                c3.metric("Hidr.", f"{df_n['Hidratos'].mean():.1f}g")
+                c4.metric("Açúcar", f"{df_n['Acucar'].mean():.1f}g")
+                c5.metric("Fibras", f"{df_n['Fibras'].mean():.1f}g")
+                avg_ex = df_e['Duracao'].mean() if not df_e.empty else 0
+                c6.metric("🏋️ Treino", f"{avg_ex:.0f} min")
 
+            mostrar_resumo("Média 7 dias com dados", diario_nutri.tail(7), diario_ex.tail(7))
             st.divider()
-            mostrar_resumo("Últimos 7 dias com registo", diario_nutri.tail(7), diario_ex.tail(7))
-            st.divider()
-            mostrar_resumo("Últimos 30 dias com registo", diario_nutri.tail(30), diario_ex.tail(30))
-            st.divider()
-            mostrar_resumo("Média Histórica Total", diario_nutri, diario_ex)
+            mostrar_resumo("Média 30 dias com dados", diario_nutri.tail(30), diario_ex.tail(30))
             
-            # Gráficos
-            col_g1, col_g2 = st.columns(2)
-            with col_g1:
-                st.subheader("Consumo Calórico")
-                st.line_chart(diario_nutri['Kcal'])
-            with col_g2:
-                st.subheader("Tempo de Exercício (min)")
-                if not diario_ex.empty:
-                    st.bar_chart(diario_ex['Duracao'])
-                else:
-                    st.write("Sem dados de exercício.")
+            st.subheader("Consumo Calórico")
+            st.line_chart(diario_nutri['Kcal'])
         else:
-            st.warning("Sem dados de alimentação para este utilizador.")
-    else:
-        st.info("O histórico está vazio.")
+            st.warning("Sem dados.")
 
 # --- PÁGINA 3: EXERCÍCIO ---
 elif page == "Registo de Exercício":
-    st.header("🏃 Registo de Atividade Física")
+    st.header("🏃 Registo de Atividade")
     modalidades = ["Corrida", "Treino de Força", "Remo", "Biking", "Caminhada", "Yoga", "Pilates", "Escadas", "Treino Funcional", "HIIT"]
     tipo = st.selectbox("Modalidade:", modalidades)
-    tempo = st.number_input("Duração (minutos):", min_value=1, value=45)
+    tempo = st.number_input("Duração (min):", min_value=1, value=45)
     
     if st.button("GRAVAR TREINO"):
         try:
             novo_t = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Modalidade": tipo, "Duracao": tempo}])
-            df_ex_atual = get_data("Exercicio")
-            df_ex_final = pd.concat([df_ex_atual, novo_t], ignore_index=True) if not df_ex_atual.empty else novo_t
-            conn.update(worksheet="Exercicio", data=df_ex_final)
-            st.success(f"Treino de {tipo} guardado!")
-            st.rerun()
+            df_ex = get_data("Exercicio")
+            df_final_ex = pd.concat([df_ex, novo_t], ignore_index=True) if not df_ex.empty else novo_t
+            conn.update(worksheet="Exercicio", data=df_final_ex)
+            st.success("Treino guardado!")
         except:
-            st.error("Certifica-te que criaste a aba 'Exercicio' no Sheets.")
+            st.error("Erro na aba 'Exercicio'.")
 
 # --- PÁGINA 4: CÂMARA IA ---
 elif page == "Câmara IA":
@@ -203,7 +188,7 @@ elif page == "Câmara IA":
         img = Image.open(foto)
         with st.spinner("IA a ler..."):
             try:
-                res = model.generate_content(["Identifica valores por 100g para: Calorias, Proteína, Hidratos, Açúcar, Lípidos, Fibras e Sal.", img])
+                res = model.generate_content(["Valores por 100g: Calorias, Proteína, Hidratos, Açúcar, Lípidos, Fibras e Sal.", img])
                 st.info(res.text)
             except Exception as e:
-                st.error(f"Erro na IA: {e}")
+                st.error(f"Erro IA: {e}")
