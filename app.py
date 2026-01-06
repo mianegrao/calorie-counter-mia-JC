@@ -39,7 +39,6 @@ data_sel = st.sidebar.date_input("Data de referência:", date.today())
 # --- FUNÇÃO PARA LER DADOS ---
 def get_data(worksheet_name="Sheet1"):
     try:
-        # ttl=0 garante que lê sempre o dado mais fresco do Google Sheets
         df = conn.read(worksheet=worksheet_name, ttl=0)
         if df is not None:
             return df.dropna(how='all')
@@ -70,7 +69,7 @@ if page == "Página Inicial / Registo":
                 "Proteina": get_v(['Proteína', 'Proteina']),
                 "Hidratos": get_v(['Hidratos']),
                 "Lipidos": get_v(['Lípidos', 'Lipidos']),
-                "Acucar": get_v(['(açúcar)', 'Acucar']),
+                "Acucar": get_v(['(açúcar)', 'Acucar', 'Açúcar']),
                 "Fibras": get_v(['Fibras']),
                 "Sal": get_v(['Sal'])
             }
@@ -115,56 +114,85 @@ if page == "Página Inicial / Registo":
 
 # --- PÁGINA 2: ESTATÍSTICAS & MÉDIAS ---
 elif page == "Estatísticas & Médias":
-    st.header(f"📊 Médias de {user}")
+    st.header(f"📊 Análise Global - {user}")
+    
+    # 1. Obter dados de Alimentação
     df_h = get_data("Sheet1")
+    # 2. Obter dados de Exercício
+    df_ex = get_data("Exercicio")
     
     if not df_h.empty:
-        # Correção do erro de Data: errors='coerce' transforma lixo em 'NaT' (Not a Time)
         df_h['Data'] = pd.to_datetime(df_h['Data'], errors='coerce')
-        # Removemos as linhas onde a data é inválida
         df_h = df_h.dropna(subset=['Data'])
-        
         df_u = df_h[df_h['Utilizador'] == user]
+        
         if not df_u.empty:
-            # Agrupar por dia (soma diária)
-            diario = df_u.groupby('Data').agg({'Kcal': 'sum', 'Proteina': 'sum'})
-            diario = diario.sort_index()
+            # Agrupar alimentação por dia
+            diario_nutri = df_u.groupby('Data').agg({
+                'Kcal': 'sum', 'Proteina': 'sum', 'Hidratos': 'sum', 'Acucar': 'sum', 'Fibras': 'sum'
+            }).sort_index()
+
+            # Processar Exercício para o utilizador
+            if not df_ex.empty:
+                df_ex['Data'] = pd.to_datetime(df_ex['Data'], errors='coerce')
+                df_ex_u = df_ex[df_ex['Utilizador'] == user]
+                diario_ex = df_ex_u.groupby('Data').agg({'Duracao': 'sum'}).sort_index()
+            else:
+                diario_ex = pd.DataFrame(columns=['Duracao'])
+
+            # Função para mostrar métricas incluindo Exercício
+            def mostrar_resumo(titulo, df_nutri_sub, df_ex_sub):
+                st.markdown(f"### {titulo}")
+                c1, c2, c3, c4, c5, c6 = st.columns(6)
+                c1.metric("Energia", f"{df_nutri_sub['Kcal'].mean():.0f} kcal")
+                c2.metric("Prot.", f"{df_nutri_sub['Proteina'].mean():.1f}g")
+                c3.metric("Hidr.", f"{df_nutri_sub['Hidratos'].mean():.1f}g")
+                c4.metric("Açúcar", f"{df_nutri_sub['Acucar'].mean():.1f}g")
+                c5.metric("Fibras", f"{df_nutri_sub['Fibras'].mean():.1f}g")
+                
+                # Média de exercício para os dias em que houve treino
+                avg_ex = df_ex_sub['Duracao'].mean() if not df_ex_sub.empty else 0
+                c6.metric("🏋️ Treino", f"{avg_ex:.0f} min", delta_color="normal")
+
+            st.divider()
+            mostrar_resumo("Últimos 7 dias com registo", diario_nutri.tail(7), diario_ex.tail(7))
+            st.divider()
+            mostrar_resumo("Últimos 30 dias com registo", diario_nutri.tail(30), diario_ex.tail(30))
+            st.divider()
+            mostrar_resumo("Média Histórica Total", diario_nutri, diario_ex)
             
-            st.subheader("Análise das Médias (Dias com registo)")
-            c1, c2, c3 = st.columns(3)
-            
-            # Cálculo de médias seguras
-            avg_sem = diario.tail(7)['Kcal'].mean() if len(diario) >= 1 else 0
-            avg_mes = diario.tail(30)['Kcal'].mean() if len(diario) >= 1 else 0
-            avg_ano = diario['Kcal'].mean() if len(diario) >= 1 else 0
-            
-            c1.metric("Média Recente (7 dias)", f"{avg_sem:.0f} kcal")
-            c2.metric("Média Mensal (30 dias)", f"{avg_mes:.0f} kcal")
-            c3.metric("Média Total", f"{avg_ano:.0f} kcal")
-            
-            st.line_chart(diario['Kcal'])
-            st.write("Gráfico: Evolução do consumo calórico diário.")
+            # Gráficos
+            col_g1, col_g2 = st.columns(2)
+            with col_g1:
+                st.subheader("Consumo Calórico")
+                st.line_chart(diario_nutri['Kcal'])
+            with col_g2:
+                st.subheader("Tempo de Exercício (min)")
+                if not diario_ex.empty:
+                    st.bar_chart(diario_ex['Duracao'])
+                else:
+                    st.write("Sem dados de exercício.")
         else:
-            st.warning("Não há dados registados para este utilizador.")
+            st.warning("Sem dados de alimentação para este utilizador.")
     else:
-        st.info("A base de dados ainda está vazia.")
+        st.info("O histórico está vazio.")
 
 # --- PÁGINA 3: EXERCÍCIO ---
 elif page == "Registo de Exercício":
     st.header("🏃 Registo de Atividade Física")
     modalidades = ["Corrida", "Treino de Força", "Remo", "Biking", "Caminhada", "Yoga", "Pilates", "Escadas", "Treino Funcional", "HIIT"]
-    
     tipo = st.selectbox("Modalidade:", modalidades)
     tempo = st.number_input("Duração (minutos):", min_value=1, value=45)
     
     if st.button("GRAVAR TREINO"):
         try:
             novo_t = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Modalidade": tipo, "Duracao": tempo}])
-            df_ex = get_data("Exercicio")
-            df_final_ex = pd.concat([df_ex, novo_t], ignore_index=True) if not df_ex.empty else novo_t
-            conn.update(worksheet="Exercicio", data=df_final_ex)
+            df_ex_atual = get_data("Exercicio")
+            df_ex_final = pd.concat([df_ex_atual, novo_t], ignore_index=True) if not df_ex_atual.empty else novo_t
+            conn.update(worksheet="Exercicio", data=df_ex_final)
             st.success(f"Treino de {tipo} guardado!")
-        except Exception as e:
+            st.rerun()
+        except:
             st.error("Certifica-te que criaste a aba 'Exercicio' no Sheets.")
 
 # --- PÁGINA 4: CÂMARA IA ---
@@ -175,7 +203,7 @@ elif page == "Câmara IA":
         img = Image.open(foto)
         with st.spinner("IA a ler..."):
             try:
-                res = model.generate_content(["Lê os valores por 100g de Calorias, Proteína, Hidratos, Açúcar, Lípidos, Fibras e Sal.", img])
+                res = model.generate_content(["Identifica valores por 100g para: Calorias, Proteína, Hidratos, Açúcar, Lípidos, Fibras e Sal.", img])
                 st.info(res.text)
             except Exception as e:
                 st.error(f"Erro na IA: {e}")
