@@ -5,125 +5,114 @@ from PIL import Image
 from datetime import date
 from streamlit_gsheets import GSheetsConnection
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Nutri Control Mia & JC", layout="wide", page_icon="🍎")
+# Configuração da Página
+st.set_page_config(page_title="Nutri Control", layout="wide")
 
-# 1. Configurar Gemini (IA)
+# 1. Configurar Gemini
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 2. Ligar ao Google Sheets (Base de Dados)
+# 2. Conexão Google Sheets
+# Adicionamos 'ttl=0' para garantir que ele lê sempre dados novos e não lixo em cache
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 3. Carregar Base de Alimentos (Excel do GitHub)
+# 3. Carregar Alimentos do Excel (GitHub)
 @st.cache_data
 def load_food_data():
     try:
         df = pd.read_excel("alimentos.xlsx", sheet_name="Valor nutricional")
-        cols = ['Proteína', 'Hidratos', '(açúcar)', 'Lípidos', 'Fibras', 'Sal', 'Calorias']
-        for col in cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         return df
     except:
         return pd.DataFrame()
 
 df_alimentos = load_food_data()
 
-# --- INTERFACE ---
-st.title("🍎 Nutri Control")
-
-# Barra Lateral
-st.sidebar.header("Definições")
+# Interface Lateral
+st.sidebar.header("Menu")
 user = st.sidebar.radio("Utilizador:", ["Mia", "João Carlos"])
-data_sel = st.sidebar.date_input("Data Selecionada:", date.today())
+data_sel = st.sidebar.date_input("Data:", date.today())
 
-tabs = st.tabs(["📝 Registar", "📸 Foto/IA", "📅 Histórico Diário"])
+tab1, tab2, tab3 = st.tabs(["📝 Registar", "📸 Foto/IA", "📊 Histórico"])
 
-# ABA 1: REGISTO
-with tabs[0]:
+# --- ABA 1: REGISTO ---
+with tab1:
     if not df_alimentos.empty:
-        alimento = st.selectbox("O que comeste?", df_alimentos['ALIMENTO'].unique())
+        alimento = st.selectbox("Escolha o Alimento:", df_alimentos['ALIMENTO'].unique())
         row = df_alimentos[df_alimentos['ALIMENTO'] == alimento].iloc[0]
         
-        qtd = st.number_input("Quantidade (g ou ml):", min_value=1.0, value=100.0)
+        qtd = st.number_input("Quantidade (g/ml):", min_value=1.0, value=100.0)
         fator = qtd / 100
         
-        # Cálculos
-        v_kcal = row['Calorias'] * fator
-        v_prot = row['Proteína'] * fator
-        v_hid = row['Hidratos'] * fator
-        v_lip = row['Lípidos'] * fator
-        v_acucar = row.get('(açúcar)', 0) * fator
-        v_fibra = row.get('Fibras', 0) * fator
-        v_sal = row.get('Sal', 0) * fator
+        # Valores calculados
+        res = {
+            "Data": data_sel.strftime("%Y-%m-%d"),
+            "Utilizador": user,
+            "Alimento": alimento,
+            "Kcal": round(float(row['Calorias']) * fator, 1),
+            "Proteina": round(float(row['Proteína']) * fator, 1),
+            "Hidratos": round(float(row['Hidratos']) * fator, 1),
+            "Acucar": round(float(row.get('(açúcar)', 0)) * fator, 1),
+            "Lipidos": round(float(row['Lípidos']) * fator, 1),
+            "Fibras": round(float(row.get('Fibras', 0)) * fator, 1),
+            "Sal": round(float(row.get('Sal', 0)) * fator, 2)
+        }
         
-        st.metric("Energia Estimada", f"{v_kcal:.1f} kcal")
-        
-        if st.button("Confirmar e Gravar"):
-            novo_registo = pd.DataFrame([{
-                "Data": data_sel.strftime("%Y-%m-%d"),
-                "Utilizador": user,
-                "Alimento": alimento,
-                "Kcal": round(v_kcal, 1),
-                "Proteina": round(v_prot, 1),
-                "Hidratos": round(v_hid, 1),
-                "Acucar": round(v_acucar, 1),
-                "Lipidos": round(v_lip, 1),
-                "Fibras": round(v_fibra, 1),
-                "Sal": round(v_sal, 2)
-            }])
-            
+        st.write(f"**Resumo:** {res['Kcal']} kcal | {res['Proteina']}g Prot")
+
+        if st.button("Gravar Agora"):
             try:
-                # Tenta ler o histórico atual
-                try:
-                    historico_atual = conn.read()
-                    if historico_atual is None or historico_atual.empty:
-                        df_final = novo_registo
-                    else:
-                        df_final = pd.concat([historico_atual, novo_registo], ignore_index=True)
-                except:
-                    df_final = novo_registo
+                # Lógica de gravação forçada
+                df_existente = conn.read()
+                novo_df = pd.DataFrame([res])
                 
-                # Atualiza a folha
+                if df_existente is not None and not df_existente.empty:
+                    # Remove linhas vazias antes de juntar
+                    df_existente = df_existente.dropna(how='all')
+                    df_final = pd.concat([df_existente, novo_df], ignore_index=True)
+                else:
+                    df_final = novo_df
+                
                 conn.update(data=df_final)
-                st.success("✅ Registado no Google Sheets!")
-                st.cache_data.clear() # Força a atualização do separador Histórico
+                st.success("✅ Guardado no Google Sheets!")
+                st.balloons() # Feedback visual de sucesso
             except Exception as e:
                 st.error(f"Erro ao gravar: {e}")
 
-# ABA 2: FOTO / IA
-with tabs[1]:
-    st.subheader("Analisar Rótulo")
-    foto = st.camera_input("Tirar foto")
+# --- ABA 2: FOTO / IA ---
+with tab2:
+    st.subheader("Análise de Rótulo")
+    # Este comando força a abertura da câmara no telemóvel
+    foto = st.camera_input("Tire foto à tabela nutricional", key="camera_ia")
+    
     if foto:
         img = Image.open(foto)
-        with st.spinner("IA a analisar..."):
-            prompt = "Lê a tabela nutricional e diz os valores por 100g: Calorias, Proteína, Hidratos, Açúcar, Lípidos, Fibras e Sal."
-            res = model.generate_content([prompt, img])
-            st.write(res.text)
+        with st.spinner("O Gemini está a analisar..."):
+            prompt = "Lê a tabela nutricional desta imagem e extrai os valores por 100g para: Calorias, Proteína, Hidratos, Açúcar, Lípidos, Fibras e Sal."
+            response = model.generate_content([prompt, img])
+            st.markdown("### Resultado da IA:")
+            st.info(response.text)
+            st.warning("Dica: Adicione estes valores ao seu ficheiro alimentos.xlsx no GitHub para que fiquem disponíveis na lista.")
 
-# ABA 3: HISTÓRICO
-with tabs[2]:
-    st.subheader(f"Diário de {user} - {data_sel}")
+# --- ABA 3: HISTÓRICO ---
+with tab3:
+    st.subheader(f"Diário de {user}")
     try:
-        # Lê sempre a versão mais recente
-        df_historico = conn.read()
-        if df_historico is not None and not df_historico.empty:
-            # Garantir que a coluna Data é string para o filtro
-            df_historico['Data'] = df_historico['Data'].astype(str)
+        # Forçamos a leitura sem cache (ttl=0)
+        df_hist = conn.read(ttl=0)
+        if df_hist is not None and not df_hist.empty:
+            df_hist['Data'] = df_hist['Data'].astype(str)
             dia_str = data_sel.strftime("%Y-%m-%d")
             
-            filtro = df_historico[(df_historico['Data'] == dia_str) & (df_historico['Utilizador'] == user)]
+            filtro = df_hist[(df_hist['Data'] == dia_str) & (df_hist['Utilizador'] == user)]
             
             if not filtro.empty:
                 st.dataframe(filtro)
-                st.metric("Total de Calorias", f"{filtro['Kcal'].sum():.1f} kcal")
-                st.metric("Total de Proteína", f"{filtro['Proteina'].sum():.1f} g")
+                total_kcal = filtro['Kcal'].sum()
+                st.metric("Total Calorias", f"{total_kcal:.1f} kcal")
             else:
-                st.info("Ainda não tens registos para este dia.")
+                st.write("Sem registos para hoje.")
         else:
-            st.info("O histórico está totalmente vazio.")
-    except Exception as e:
-        st.error(f"Não foi possível carregar o histórico: {e}")
+            st.write("A folha está vazia.")
+    except:
+        st.write("Ainda não foi possível ler os dados.")
