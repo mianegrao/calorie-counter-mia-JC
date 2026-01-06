@@ -118,12 +118,65 @@ elif page == "Estatísticas & Médias":
         df_u = df_h[df_h['Utilizador'] == user]
         if not df_u.empty:
             diario = df_u.groupby('Data').agg({'Kcal': 'sum', 'Proteina': 'sum'})
+            
+            st.subheader("Médias Reais (Dias com registo)")
             c1, c2, c3 = st.columns(3)
+            # Média dos últimos 7 registos
             c1.metric("Média Semanal", f"{diario.tail(7)['Kcal'].mean():.0f} kcal")
+            # Média dos últimos 30 registos
             c2.metric("Média Mensal", f"{diario.tail(30)['Kcal'].mean():.0f} kcal")
+            # Média total
             c3.metric("Média Anual", f"{diario['Kcal'].mean():.0f} kcal")
+            
             st.line_chart(diario['Kcal'])
 
 # --- PÁGINA 3: EXERCÍCIO ---
 elif page == "Registo de Exercício":
-    st.header("🏃 Registo de Atividade")
+    st.header("🏃 Registo de Atividade Física")
+    
+    # Lista exata das modalidades solicitadas
+    modalidades = [
+        "Corrida", "Treino de Força", "Remo", "Biking", 
+        "Caminhada", "Yoga", "Pilates", "Escadas", 
+        "Treino Funcional", "HIIT"
+    ]
+    
+    tipo = st.selectbox("Modalidade:", modalidades)
+    tempo = st.number_input("Duração (minutos):", min_value=1, value=45)
+    
+    if st.button("GRAVAR TREINO"):
+        try:
+            novo_t = pd.DataFrame([{
+                "Data": str(data_sel), 
+                "Utilizador": user, 
+                "Modalidade": tipo, 
+                "Duracao": tempo
+            }])
+            
+            # Tentar ler a aba 'Exercicio'
+            df_ex = get_data("Exercicio")
+            
+            if df_ex.empty:
+                df_final_ex = novo_t
+            else:
+                df_final_ex = pd.concat([df_ex, novo_t], ignore_index=True)
+            
+            # Gravação na aba específica
+            conn.update(worksheet="Exercicio", data=df_final_ex)
+            st.success(f"Treino de {tipo} ({tempo} min) guardado com sucesso!")
+            
+        except Exception as e:
+            st.error(f"Erro: Certifica-te de que criaste a aba 'Exercicio' no Google Sheets com os cabeçalhos: Data, Utilizador, Modalidade, Duracao. Erro: {e}")
+
+# --- PÁGINA 4: CÂMARA IA ---
+elif page == "Câmara IA":
+    st.header("📸 Analisar Rótulo")
+    foto = st.camera_input("Foto do rótulo")
+    if foto:
+        img = Image.open(foto)
+        with st.spinner("IA a ler..."):
+            try:
+                res = model.generate_content(["Identifica os valores por 100g para: Calorias, Proteína, Hidratos, Açúcar, Lípidos, Fibras e Sal.", img])
+                st.info(res.text)
+            except Exception as e:
+                st.error(f"Erro na IA: {e}")
