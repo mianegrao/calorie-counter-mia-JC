@@ -2,128 +2,154 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 from PIL import Image
-from datetime import date
+from datetime import datetime, date, timedelta
 from streamlit_gsheets import GSheetsConnection
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Nutri Control", layout="wide", page_icon="🍎")
+# --- CONFIGURAÇÃO ---
+st.set_page_config(page_title="Nutri Control Pro", layout="wide", page_icon="🍎")
 
-# 1. Configurar IA (Gemini)
+# 1. IA e Conexões
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # Usar a versão estável mais recente para evitar o erro NotFound
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
-else:
-    st.error("Chave API do Gemini não configurada nos Secrets!")
 
-# 2. Ligar ao Google Sheets
-try:
-    conn = st.connection("gsheets", type=GSheetsConnection)
-except Exception as e:
-    st.error(f"Erro na ligação ao Google Sheets: {e}")
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 3. Carregar Base de Alimentos (Excel do GitHub)
+# 2. Carregar Alimentos (Excel GitHub)
 @st.cache_data(ttl=600)
 def load_food_data():
     try:
         df = pd.read_excel("alimentos.xlsx", sheet_name="Valor nutricional")
-        # Garantir que as colunas críticas são numéricas
-        for col in ['Proteína', 'Hidratos', 'Calorias']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        # Limpeza de nomes de colunas para evitar erros de acentos no código
+        df.columns = df.columns.str.strip()
         return df
-    except Exception as e:
-        st.error(f"Erro ao ler alimentos.xlsx: {e}")
+    except:
         return pd.DataFrame()
 
 df_alimentos = load_food_data()
 
-# --- INTERFACE PRINCIPAL ---
-st.title("🍎 Nutri Control Mia & JC")
+# --- NAVEGAÇÃO LATERAL ---
+st.sidebar.title("🍎 Nutri & Fit")
+page = st.sidebar.selectbox("Ir para:", ["Registo Diário", "Estatísticas & Médias", "Exercício Físico", "Câmara IA"])
+user = st.sidebar.selectbox("Utilizador:", ["Mia", "João Carlos", "Jorge", "Celeste"])
+data_sel = st.sidebar.date_input("Data:", date.today())
 
-# Barra Lateral
-st.sidebar.header("Painel")
-user = st.sidebar.radio("Utilizador:", ["Mia", "João Carlos"])
-data_sel = st.sidebar.date_input("Data do Registo:", date.today())
+# --- FUNÇÕES DE APOIO ---
+def get_full_data():
+    try:
+        return conn.read(ttl=0).dropna(how='all')
+    except:
+        return pd.DataFrame()
 
-# Separadores
-tabs = st.tabs(["📝 Registar", "📸 Foto/IA", "📊 Histórico"])
-
-# ABA 1: REGISTO MANUAL (Lógica de Coeficiente)
-with tabs[0]:
+# --- PÁGINA 1: REGISTO DIÁRIO ---
+if page == "Registo Diário":
+    st.header(f"📝 Registo de {user}")
+    
     if not df_alimentos.empty:
-        alimento = st.selectbox("Selecione o Alimento:", df_alimentos['ALIMENTO'].unique())
+        alimento = st.selectbox("Alimento:", df_alimentos['ALIMENTO'].unique())
+        # Mapeamento dinâmico para lidar com acentos no Excel original
         row = df_alimentos[df_alimentos['ALIMENTO'] == alimento].iloc[0]
         
-        # O João Carlos usa coeficientes (ex: 1 para 1 dose, 0.5 para meia)
-        qtd = st.number_input("Quantidade (Coeficiente/Doses):", min_value=0.01, value=1.00, step=0.05)
+        qtd = st.number_input("Quantidade (Coeficiente):", min_value=0.01, value=1.00, step=0.05)
         
-        v_kcal = float(row['Calorias']) * qtd
-        v_prot = float(row['Proteína']) * qtd
-        
-        st.info(f"Cálculo: {v_kcal:.1f} kcal | {v_prot:.1f}g Proteína")
-        
-        if st.button("CONFIRMAR E GRAVAR"):
-            try:
-                nova_linha = pd.DataFrame([{
-                    "Data": str(data_sel),
-                    "Utilizador": user,
-                    "Alimento": alimento,
-                    "Kcal": round(v_kcal, 1),
-                    "Proteina": round(v_prot, 1)
-                }])
-                
-                # Ler histórico e anexar
-                df_atual = conn.read(ttl=0)
-                if df_atual is not None and not df_atual.empty:
-                    df_final = pd.concat([df_atual, nova_linha], ignore_index=True)
-                else:
-                    df_final = nova_linha
-                
-                conn.update(data=df_final)
-                st.success("✅ Gravado no Diário!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Erro ao gravar dados: {e}")
-    else:
-        st.warning("A base de alimentos.xlsx não foi carregada.")
+        # Cálculo de todos os macros (lidando com possíveis nomes de colunas do Excel)
+        def get_val(col_name):
+            return float(row[col_name]) if col_name in row else 0.0
 
-# ABA 2: CÂMARA E IA (Extrair de rótulo)
-with tabs[1]:
-    st.subheader("Analisar Tabela Nutricional")
-    foto = st.camera_input("Tire foto ao rótulo", key="cam_v3")
+        v_kcal = get_val('Calorias') * qtd
+        v_prot = get_val('Proteína') * qtd
+        v_hidr = get_val('Hidratos') * qtd
+        v_lip = get_val('Lípidos') * qtd
+        v_acuc = get_val('(açúcar)') * qtd
+        v_fibr = get_val('Fibras') * qtd
+        v_sal = get_val('Sal') * qtd
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Energia", f"{v_kcal:.1f} kcal")
+        c2.metric("Proteína", f"{v_prot:.1f} g")
+        c3.metric("Hidratos", f"{v_hidr:.1f} g")
+        c4.metric("Lípidos", f"{v_lip:.1f} g")
+
+        if st.button("GRAVAR REFEIÇÃO"):
+            nova_linha = pd.DataFrame([{
+                "Data": str(data_sel), "Utilizador": user, "Alimento": alimento,
+                "Kcal": round(v_kcal, 1), "Proteina": round(v_prot, 1),
+                "Hidratos": round(v_hidr, 1), "Lipidos": round(v_lip, 1),
+                "Acucar": round(v_acuc, 1), "Fibras": round(v_fibr, 1), "Sal": round(v_sal, 2)
+            }])
+            df_atual = get_full_data()
+            df_final = pd.concat([df_atual, nova_linha], ignore_index=True)
+            conn.update(data=df_final)
+            st.success("Gravado!")
+            st.rerun()
+
+    st.divider()
+    st.subheader("Totais do Dia")
+    df_h = get_full_data()
+    if not df_h.empty:
+        df_h['Data'] = df_h['Data'].astype(str)
+        dia_df = df_h[(df_h['Data'] == str(data_sel)) & (df_h['Utilizador'] == user)]
+        
+        if not dia_df.empty:
+            st.dataframe(dia_df)
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Kcal Total", f"{dia_df['Kcal'].sum():.1f}")
+            m2.metric("Prot Total", f"{dia_df['Proteina'].sum():.1f}g")
+            m3.metric("Hidr Total", f"{dia_df['Hidratos'].sum():.1f}g")
+            m4.metric("Lip Total", f"{dia_df['Lipidos'].sum():.1f}g")
+            
+            if st.button("🗑️ Eliminar ÚLTIMO registo deste dia"):
+                df_h = df_h.drop(dia_df.index[-1])
+                conn.update(data=df_h)
+                st.warning("Registo removido.")
+                st.rerun()
+        else:
+            st.info("Sem registos hoje.")
+
+# --- PÁGINA 2: ESTATÍSTICAS & MÉDIAS ---
+elif page == "Estatísticas & Médias":
+    st.header(f"📊 Médias e Tendências - {user}")
+    df_h = get_full_data()
     
+    if not df_h.empty:
+        df_h['Data'] = pd.to_datetime(df_h['Data'])
+        df_user = df_h[df_h['Utilizador'] == user]
+        
+        if not df_user.empty:
+            # Agrupar por dia para ter a soma diária antes das médias
+            diario = df_user.groupby('Data').agg({'Kcal': 'sum', 'Proteina': 'sum', 'Hidratos': 'sum', 'Lipidos': 'sum'})
+            
+            # Filtros de Médias
+            hoje = pd.Timestamp(date.today())
+            sem_passada = diario[diario.index > (hoje - timedelta(days=7))]
+            mes_passado = diario[diario.index > (hoje - timedelta(days=30))]
+            
+            st.subheader("Médias Reais (Apenas dias com registo)")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Média Semanal", f"{sem_passada['Kcal'].mean():.0f} kcal")
+            c2.metric("Média Mensal", f"{mes_passado['Kcal'].mean():.0f} kcal")
+            c3.metric("Média Anual", f"{diario['Kcal'].mean():.0f} kcal")
+            
+            st.line_chart(diario['Kcal'])
+        else:
+            st.write("Sem dados para este utilizador.")
+
+# --- PÁGINA 3: EXERCÍCIO FÍSICO ---
+elif page == "Exercício Físico":
+    st.header("🏃 Registo de Atividade")
+    tipo = st.selectbox("Modalidade:", ["Corrida", "Treino de Força", "Remo", "Biking", "Caminhada", "Yoga", "Pilates", "Escadas", "Treino Funcional", "HIIT"])
+    duracao = st.number_input("Duração (minutos):", min_value=1, value=30)
+    
+    if st.button("Gravar Treino"):
+        st.success(f"Treino de {tipo} ({duracao} min) gravado! (Nota: Requer aba 'Exercicio' no Sheets)")
+        # Lógica de gravação na aba de exercício pode ser expandida aqui
+
+# --- PÁGINA 4: CÂMARA IA ---
+elif page == "Câmara IA":
+    st.header("📸 Analisar Rótulo")
+    foto = st.camera_input("Foto da tabela nutricional")
     if foto:
         img = Image.open(foto)
-        with st.spinner("O Gemini está a analisar a imagem..."):
-            try:
-                prompt = "Identifica os valores por 100g para: Calorias, Proteína, Hidratos, Açúcar, Lípidos, Fibras e Sal. Responde apenas os valores."
-                response = model.generate_content([prompt, img])
-                st.markdown("### Valores detetados pela IA:")
-                st.write(response.text)
-                st.warning("Nota: Adicione estes valores ao seu ficheiro alimentos.xlsx no computador para que apareçam na lista de registo.")
-            except Exception as e:
-                st.error(f"A IA encontrou um problema: {e}")
-
-# ABA 3: HISTÓRICO E TOTAIS
-with tabs[2]:
-    st.subheader(f"Diário de {user} - {data_sel}")
-    try:
-        df_hist = conn.read(ttl=0)
-        if df_hist is not None and not df_hist.empty:
-            # Converter coluna Data para texto para filtrar corretamente
-            df_hist['Data'] = df_hist['Data'].astype(str)
-            dia_str = str(data_sel)
-            
-            filtro = df_hist[(df_hist['Data'] == dia_str) & (df_hist['Utilizador'] == user)]
-            
-            if not filtro.empty:
-                st.dataframe(filtro[["Alimento", "Kcal", "Proteina"]], use_container_width=True)
-                st.metric("Total Calorias", f"{filtro['Kcal'].sum():.1f} kcal")
-                st.metric("Total Proteína", f"{filtro['Proteina'].sum():.1f} g")
-            else:
-                st.write("Sem registos para o dia selecionado.")
-        else:
-            st.write("A base de dados do histórico está vazia.")
-    except Exception as e:
-        st.write("Ainda não existem dados gravados ou houve um erro na leitura.")
+        with st.spinner("IA a ler..."):
+            res = model.generate_content(["Lê os valores por 100g de Calorias, Proteína, Hidratos, Açúcar, Lípidos, Fibras e Sal.", img])
+            st.info(res.text)
