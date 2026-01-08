@@ -60,14 +60,11 @@ def load_combined_food_data():
         df_sheets.columns = df_sheets.columns.str.strip()
         df_sheets = df_sheets.reset_index(drop=True)
     
-    # 3. Fundir com segurança (evitando InvalidIndexError)
+    # 3. Fundir com segurança
     if df_excel.empty and df_sheets.empty:
         return pd.DataFrame(columns=["ALIMENTO", "Proteína", "Hidratos", "(açúcar)", "Lípidos", "(satur.)", "Fibras", "Sal", "Calorias"])
     
-    # Concatenar e remover duplicados por nome de alimento
     df_combined = pd.concat([df_excel, df_sheets], axis=0, ignore_index=True)
-    
-    # Manter apenas a última entrada de cada alimento e remover duplicados de colunas se existirem
     df_combined = df_combined.loc[:, ~df_combined.columns.duplicated()]
     df_combined = df_combined.drop_duplicates(subset=['ALIMENTO'], keep='last')
     
@@ -127,11 +124,9 @@ if page == "Página Inicial / Registo":
                                 "Fibras": n_fib, "Sal": n_sal, "Calorias": n_kcal
                             }])
                             
-                            df_n_atual = conn.read(worksheet="Novos_Alimentos", ttl=0)
-                            if df_n_atual is None: df_n_atual = pd.DataFrame()
-                            
+                            df_n_atual = get_data_sheets("Novos_Alimentos")
                             df_n_final = pd.concat([df_n_atual, novo_item], ignore_index=True)
-                            # Forçar ordem de colunas
+                            
                             cols = ["ALIMENTO", "Proteína", "Hidratos", "(açúcar)", "Lípidos", "(satur.)", "Fibras", "Sal", "Calorias"]
                             df_n_final = df_n_final[cols]
                             
@@ -168,7 +163,7 @@ if page == "Página Inicial / Registo":
             if st.button("CONFIRMAR REGISTO NO DIÁRIO"):
                 try:
                     with st.spinner("A registar..."):
-                        df_atual = conn.read(worksheet="Sheet1", ttl=0)
+                        df_atual = get_data_sheets("Sheet1")
                         nova_l = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": alimento_sel, **{k: round(v, 2) for k, v in vals.items()}}])
                         safe_update("Sheet1", pd.concat([df_atual, nova_l], ignore_index=True))
                         st.cache_data.clear()
@@ -195,4 +190,54 @@ if page == "Página Inicial / Registo":
                 
                 st.markdown("---")
                 m1, m2, m3 = st.columns(3)
-                m1.metric("Kcal", f"{dia_df['Calor
+                m1.metric("Kcal Total", f"{dia_df['Calorias'].sum():.0f}")
+                m2.metric("Proteína Total", f"{dia_df['Proteína'].sum():.1f}g")
+                m3.metric("Fibras Totais", f"{dia_df.get('Fibras', pd.Series([0])).sum():.1f}g")
+            else:
+                st.info("Sem registos para este dia.")
+
+# --- OUTRAS PÁGINAS (ESTATÍSTICAS, EXERCÍCIO, CÂMARA IA) ---
+elif page == "Estatísticas & Médias":
+    st.header(f"📊 Estatísticas - {user}")
+    df_h = get_data_sheets("Sheet1")
+    if not df_h.empty:
+        df_h['Data'] = pd.to_datetime(df_h['Data'], errors='coerce')
+        df_u = df_h[df_h['Utilizador'] == user].dropna(subset=['Data'])
+        if not df_u.empty:
+            diario = df_u.groupby('Data').agg({'Calorias':'sum','Proteína':'sum','(açúcar)':'sum'}).sort_index()
+            st.line_chart(diario['Calorias'])
+            st.write(f"Média diária: {diario['Calorias'].mean():.0f} kcal")
+
+elif page == "Registo de Exercício":
+    st.header("🏃 Registo de Atividade")
+    tipo = st.selectbox("Atividade:", ["Treino Força", "Corrida", "Caminhada", "Yoga", "Ciclismo"])
+    tempo = st.number_input("Duração (minutos):", min_value=1, value=45)
+    if st.button("GRAVAR EXERCÍCIO"):
+        try:
+            df_ex = get_data_sheets("Exercicio")
+            novo_ex = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Modalidade": tipo, "Duracao": tempo}])
+            safe_update("Exercicio", pd.concat([df_ex, novo_ex], ignore_index=True))
+            st.success("Exercício registado!")
+        except Exception as e:
+            st.error(f"Erro ao gravar exercício: {e}")
+
+elif page == "Câmara IA":
+    st.header("📸 Analisar Rótulo com IA")
+    foto = st.camera_input("Tire uma foto do rótulo nutricional")
+    if foto:
+        img = Image.open(foto)
+        with st.spinner("A ler dados nutricionais..."):
+            prompt = "Identifica os valores por 100g para: ALIMENTO, Proteína, Hidratos, (açúcar), Lípidos, (satur.), Fibras, Sal, Calorias. Responde apenas em formato JSON."
+            res = model.generate_content([prompt, img])
+            try:
+                # Limpeza básica do texto para garantir JSON puro
+                json_text = res.text.replace('```json', '').replace('```', '').strip()
+                data_ia = json.loads(json_text)
+                st.json(data_ia)
+                if st.button("💾 Guardar na Base Permanente"):
+                    df_n = get_data_sheets("Novos_Alimentos")
+                    safe_update("Novos_Alimentos", pd.concat([df_n, pd.DataFrame([data_ia])], ignore_index=True))
+                    st.cache_data.clear()
+                    st.success("Dados da IA guardados!")
+            except:
+                st.error("Não foi possível processar a imagem. Tente uma foto mais nítida.")
