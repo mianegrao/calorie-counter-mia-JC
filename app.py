@@ -18,7 +18,21 @@ if "GEMINI_API_KEY" in st.secrets:
 # 2. Conexão Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- FUNÇÕES DE CARREGAMENTO ---
+# --- FUNÇÕES DE SUPORTE E RETRY ---
+
+def safe_update(worksheet, data, max_retries=3):
+    """Tenta atualizar o Sheets com sistema de repetição em caso de erro."""
+    for i in range(max_retries):
+        try:
+            conn.update(worksheet=worksheet, data=data)
+            return True
+        except Exception as e:
+            if i < max_retries - 1:
+                time.sleep(2) # Espera 2 segundos antes de tentar de novo
+                continue
+            else:
+                raise e
+    return False
 
 @st.cache_data(ttl=60)
 def get_data_sheets(worksheet_name):
@@ -30,7 +44,6 @@ def get_data_sheets(worksheet_name):
 
 @st.cache_data(ttl=600)
 def load_combined_food_data():
-    # 1. Carregar do Excel (GitHub)
     try:
         df_excel = pd.read_excel("alimentos.xlsx", sheet_name="Valor nutricional")
         df_excel.columns = df_excel.columns.str.strip()
@@ -38,16 +51,13 @@ def load_combined_food_data():
     except:
         df_excel = pd.DataFrame()
 
-    # 2. Carregar do Google Sheets (Novos_Alimentos)
     df_sheets = get_data_sheets("Novos_Alimentos")
     if not df_sheets.empty:
         df_sheets = df_sheets.rename(columns={"Alimento": "ALIMENTO"})
     
-    # 3. Fundir as duas listas
     df_final = pd.concat([df_excel, df_sheets], ignore_index=True)
     return df_final.drop_duplicates(subset=['ALIMENTO'], keep='last').sort_values(by='ALIMENTO')
 
-# Carregar a lista fundida
 df_alimentos = load_combined_food_data()
 
 # --- NAVEGAÇÃO ---
@@ -85,32 +95,35 @@ if page == "Página Inicial / Registo":
             c1, c2 = st.columns(2)
             n_kcal = c1.number_input("Kcal", min_value=0.0, step=1.0)
             n_prot = c2.number_input("Proteína (g)", min_value=0.0, step=0.1)
-            
             c3, c4 = st.columns(2)
             n_hid = c3.number_input("Hidratos (g)", min_value=0.0, step=0.1)
             n_acu = c4.number_input("Açúcar (g)", min_value=0.0, step=0.1)
-            
             c5, c6 = st.columns(2)
             n_lip = c5.number_input("Lípidos (g)", min_value=0.0, step=0.1)
             n_sat = c6.number_input("Saturadas (g)", min_value=0.0, step=0.1)
-            
             c7, c8 = st.columns(2)
             n_fib = c7.number_input("Fibra (g)", min_value=0.0, step=0.1)
             n_sal = c8.number_input("Sal (g)", min_value=0.0, step=0.01)
             
             if st.button("💾 GUARDAR NA BASE PERMANENTE"):
                 if n_nome:
-                    novo_item = pd.DataFrame([{
-                        "Alimento": n_nome, "Kcal": n_kcal, "Proteina": n_prot, 
-                        "Hidratos": n_hid, "Acucar": n_acu, "Lipidos": n_lip, 
-                        "Saturadas": n_sat, "Fibra": n_fib, "Sal": n_sal
-                    }])
-                    df_n_atual = conn.read(worksheet="Novos_Alimentos", ttl=0)
-                    conn.update(worksheet="Novos_Alimentos", data=pd.concat([df_n_atual, novo_item], ignore_index=True))
-                    st.cache_data.clear()
-                    st.success("Guardado! Agora já o podes pesquisar na lista acima.")
-                    time.sleep(1)
-                    st.rerun()
+                    try:
+                        with st.spinner("A guardar permanentemente..."):
+                            novo_item = pd.DataFrame([{
+                                "Alimento": n_nome, "Kcal": n_kcal, "Proteina": n_prot, 
+                                "Hidratos": n_hid, "Acucar": n_acu, "Lipidos": n_lip, 
+                                "Saturadas": n_sat, "Fibra": n_fib, "Sal": n_sal
+                            }])
+                            df_n_atual = conn.read(worksheet="Novos_Alimentos", ttl=0)
+                            safe_update("Novos_Alimentos", pd.concat([df_n_atual, novo_item], ignore_index=True))
+                            st.cache_data.clear()
+                            st.success("Guardado com sucesso!")
+                            time.sleep(1)
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro persistente no Google Sheets: {e}")
+                else:
+                    st.warning("O nome é obrigatório.")
         
         elif alimento_sel:
             row = df_alimentos[df_alimentos['ALIMENTO'] == alimento_sel].iloc[0]
@@ -135,13 +148,19 @@ if page == "Página Inicial / Registo":
             st.info(f"✨ {vals['Kcal']:.1f} kcal | {vals['Proteina']:.1f}g Prot")
 
             if st.button("CONFIRMAR REGISTO NO DIÁRIO"):
-                df_atual = conn.read(worksheet="Sheet1", ttl=0)
-                nova_l = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": alimento_sel, **{k: round(v, 2) for k, v in vals.items()}}])
-                conn.update(worksheet="Sheet1", data=pd.concat([df_atual, nova_l], ignore_index=True))
-                st.cache_data.clear()
-                st.success("Registado no diário!")
-                time.sleep(1)
-                st.rerun()
+                try:
+                    with st.spinner("A registar no diário..."):
+                        df_atual = conn.read(worksheet="Sheet1", ttl=0)
+                        nova_l = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": alimento_sel, **{k: round(v, 2) for k, v in vals.items()}}])
+                        
+                        safe_update("Sheet1", pd.concat([df_atual, nova_l], ignore_index=True))
+                        
+                        st.cache_data.clear()
+                        st.success("Registado!")
+                        time.sleep(1)
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"O Google Sheets falhou após 3 tentativas. Tente novamente mais tarde. Erro: {e}")
 
     with col2:
         st.subheader(f"Resumo de {data_sel}")
@@ -153,7 +172,6 @@ if page == "Página Inicial / Registo":
             
             if not dia_df.empty:
                 dia_df.insert(0, "Sel.", False)
-                # Adicionadas colunas de Fibra e Sal à visualização
                 display_cols = ["Sel.", "Alimento", "Kcal", "Proteina", "Acucar", "Saturadas", "Fibra", "Sal"]
                 cols_to_show = [c for c in display_cols if c in dia_df.columns]
                 
@@ -167,10 +185,13 @@ if page == "Página Inicial / Registo":
                 selected_indices = edited_df[edited_df["Sel."] == True].index
                 if len(selected_indices) > 0:
                     if st.button(f"🗑️ Apagar Selecionados"):
-                        df_final = df_h.drop(selected_indices)
-                        conn.update(worksheet="Sheet1", data=df_final)
-                        st.cache_data.clear()
-                        st.rerun()
+                        try:
+                            df_final = df_h.drop(selected_indices)
+                            safe_update("Sheet1", df_final)
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao apagar: {e}")
                 
                 st.markdown("---")
                 m1, m2, m3, m4 = st.columns(4)
