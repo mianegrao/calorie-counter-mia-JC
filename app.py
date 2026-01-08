@@ -18,7 +18,7 @@ if "GEMINI_API_KEY" in st.secrets:
 # 2. Conexão Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 3. Carregar Base de Alimentos (Excel GitHub) - Cache de 1 hora
+# 3. Carregar Base de Alimentos (Excel GitHub)
 @st.cache_data(ttl=3600)
 def load_food_data():
     try:
@@ -31,8 +31,8 @@ def load_food_data():
 
 df_alimentos = load_food_data()
 
-# --- FUNÇÃO DE LEITURA COM CACHE (Para evitar Erro 429) ---
-@st.cache_data(ttl=120) # Guarda os dados por 2 min para não sobrecarregar a Google
+# --- FUNÇÃO DE LEITURA COM CACHE ---
+@st.cache_data(ttl=120)
 def get_data_cached(worksheet_name):
     try:
         df = conn.read(worksheet=worksheet_name, ttl=0)
@@ -66,55 +66,66 @@ if page == "Página Inicial / Registo":
     
     with col1:
         st.subheader("Novo Registo")
-        if not df_alimentos.empty:
-            alimento = st.selectbox("Pesquisar Alimento:", options=df_alimentos['ALIMENTO'].unique(), index=None, placeholder="Escreva para procurar...")
-            
-            if alimento:
-                row = df_alimentos[df_alimentos['ALIMENTO'] == alimento].iloc[0]
-                qtd = st.number_input("Quantidade:", min_value=0.01, value=1.00, step=0.05)
+        
+        # Opções da lista + opção de adicionar novo
+        opcoes_alimentos = list(df_alimentos['ALIMENTO'].unique())
+        
+        alimento_sel = st.selectbox(
+            "Pesquisar Alimento:", 
+            options=opcoes_alimentos, 
+            index=None, 
+            placeholder="Escreva para procurar...",
+            help="Se não encontrar, use o botão abaixo para adicionar."
+        )
+
+        # Botão para expandir formulário de novo alimento
+        add_novo = st.checkbox("➕ Não encontrei? Adicionar novo alimento à base")
+
+        if add_novo:
+            st.markdown("---")
+            st.info("Preencha os dados (por 100g ou dose) para guardar no Back Desk.")
+            with st.form("form_novo_alimento"):
+                n_nome = st.text_input("Nome do Alimento:")
+                c_kcal, c_prot = st.columns(2)
+                n_kcal = c_kcal.number_input("Kcal", min_value=0.0, step=1.0)
+                n_prot = c_prot.number_input("Proteína (g)", min_value=0.0, step=0.1)
                 
-                def get_v(names):
-                    for n in names:
-                        if n in row: return float(row[n]) * qtd
-                    return 0.0
-
-                vals = {"Kcal": get_v(['Calorias', 'Kcal']), "Proteina": get_v(['Proteína', 'Proteina']), "Hidratos": get_v(['Hidratos']), "Lipidos": get_v(['Lípidos', 'Lipidos']), "Acucar": get_v(['(açúcar)', 'Acucar', 'Açúcar']), "Fibras": get_v(['Fibras']), "Sal": get_v(['Sal'])}
-                st.info(f"✨ {vals['Kcal']:.1f} kcal | {vals['Proteina']:.1f}g Proteína")
-
-                if st.button("CONFIRMAR E GRAVAR"):
-                    try:
-                        with st.spinner("A guardar..."):
-                            nova_linha = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": alimento, **{k: round(v, 2) for k, v in vals.items()}}])
-                            # Aqui limpamos a cache para forçar a leitura dos dados novos após gravar
-                            st.cache_data.clear() 
-                            df_atual = conn.read(worksheet="Sheet1", ttl=0)
-                            df_final = pd.concat([df_atual, nova_linha], ignore_index=True)
-                            conn.update(data=df_final)
-                            st.success("Gravado!")
+                c_hid, c_lip = st.columns(2)
+                n_hid = c_hid.number_input("Hidratos (g)", min_value=0.0, step=0.1)
+                n_lip = c_lip.number_input("Lípidos (g)", min_value=0.0, step=0.1)
+                
+                c_acu, c_fib = st.columns(2)
+                n_acu = c_acu.number_input("Açúcar (g)", min_value=0.0, step=0.1)
+                n_fib = c_fib.number_input("Fibras (g)", min_value=0.0, step=0.1)
+                
+                n_sal = st.number_input("Sal (g)", min_value=0.0, step=0.01)
+                
+                if st.form_submit_button("💾 GUARDAR NO BACK DESK E REGISTAR"):
+                    if n_nome:
+                        try:
+                            # 1. Gravar na aba de Novos Alimentos
+                            novo_alimento_df = pd.DataFrame([{
+                                "Alimento": n_nome, "Kcal": n_kcal, "Proteina": n_prot, 
+                                "Hidratos": n_hid, "Lipidos": n_lip, "Acucar": n_acu, 
+                                "Fibras": n_fib, "Sal": n_sal
+                            }])
+                            df_novos_base = get_data_cached("Novos_Alimentos")
+                            conn.update(worksheet="Novos_Alimentos", data=pd.concat([df_novos_base, novo_alimento_df], ignore_index=True))
+                            
+                            # 2. Registar no diário de hoje
+                            nova_linha_diario = pd.DataFrame([{
+                                "Data": str(data_sel), "Utilizador": user, "Alimento": n_nome,
+                                "Kcal": n_kcal, "Proteina": n_prot, "Hidratos": n_hid, 
+                                "Lipidos": n_lip, "Acucar": n_acu, "Fibras": n_fib, "Sal": n_sal
+                            }])
+                            st.cache_data.clear()
+                            df_diario_base = conn.read(worksheet="Sheet1", ttl=0)
+                            conn.update(worksheet="Sheet1", data=pd.concat([df_diario_base, nova_linha_diario], ignore_index=True))
+                            
+                            st.success(f"✅ {n_nome} guardado e registado!")
                             time.sleep(1)
                             st.rerun()
-                    except Exception as e:
-                        st.error("A Google está sobrecarregada. Aguarde 30 segundos e tente de novo.")
-
-    with col2:
-        st.subheader(f"Resumo de {data_sel}")
-        df_h = get_data_cached("Sheet1")
-        if not df_h.empty:
-            df_h['Data'] = df_h['Data'].astype(str)
-            dia_df = df_h[(df_h['Data'] == str(data_sel)) & (df_h['Utilizador'] == user)].copy()
-            if not dia_df.empty:
-                display_df = dia_df[["Alimento", "Kcal", "Proteina", "Hidratos", "Lipidos", "Acucar", "Fibras", "Sal"]].rename(columns={"Proteina": "Proteína", "Lipidos": "Lípidos", "Acucar": "Açúcar"})
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
-                
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Energia", f"{dia_df['Kcal'].sum():.0f} kcal")
-                c2.metric("Proteína", f"{dia_df['Proteina'].sum():.1f}g")
-                c3.metric("Açúcar", f"{dia_df['Acucar'].sum():.1f}g")
-
-                if st.button("🗑️ Apagar último"):
-                    st.cache_data.clear()
-                    df_res = df_h.drop(dia_df.index[-1])
-                    conn.update(data=df_res)
-                    st.rerun()
-
-# (Restante do código: Estatísticas, Exercício e Câmara usam get_data_cached)
+                        except:
+                            st.error("Erro ao comunicar com o Sheets. Verifique a aba 'Novos_Alimentos'.")
+                    else:
+                        st.warning("Por favor, dê um nome ao alimento
