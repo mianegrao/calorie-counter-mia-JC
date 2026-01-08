@@ -79,62 +79,57 @@ if page == "Página Inicial / Registo":
 
         if add_novo:
             st.markdown("---")
-            st.warning("Preenche os valores por 100g ou por dose (conforme o teu Excel).")
+            st.info("Insere os valores por 100g/dose e depois indica a quantidade consumida.")
             
             n_nome = st.text_input("Nome do Alimento:", key="manual_n_nome")
             
+            c_q1, c_q2 = st.columns([2, 1])
+            n_qtd = c_q2.number_input("Quantidade (Qtd):", min_value=0.01, value=1.00, step=0.05, help="Ex: 0.5 para metade, 2 para o dobro")
+            
             c1, c2 = st.columns(2)
-            n_kcal = c1.number_input("Energia (Kcal)", min_value=0.0, step=1.0)
-            n_prot = c2.number_input("Proteína (g)", min_value=0.0, step=0.1)
+            n_kcal = c1.number_input("Energia (Kcal por 100g)", min_value=0.0, step=1.0)
+            n_prot = c2.number_input("Proteína (g por 100g)", min_value=0.0, step=0.1)
             
             c3, c4 = st.columns(2)
-            n_hid = c3.number_input("Hidratos de Carbono (g)", min_value=0.0, step=0.1)
-            n_acu = c4.number_input("dos quais Açúcares (g)", min_value=0.0, step=0.1)
+            n_hid = c3.number_input("Hidratos (g por 100g)", min_value=0.0, step=0.1)
+            n_acu = c4.number_input("Açúcares (g por 100g)", min_value=0.0, step=0.1)
             
             c5, c6 = st.columns(2)
-            n_lip = c5.number_input("Lípidos/Gorduras (g)", min_value=0.0, step=0.1)
-            n_sat = c6.number_input("das quais Saturadas (g)", min_value=0.0, step=0.1)
+            n_lip = c5.number_input("Lípidos (g por 100g)", min_value=0.0, step=0.1)
+            n_sat = c6.number_input("Saturadas (g por 100g)", min_value=0.0, step=0.1)
             
-            c7, c8 = st.columns(2)
-            n_fib = c7.number_input("Fibra (g)", min_value=0.0, step=0.1)
-            n_sal = c8.number_input("Sal (g)", min_value=0.0, step=0.01)
-            
-            if st.button("💾 GUARDAR NA BASE E REGISTAR NO DIÁRIO"):
+            if st.button("💾 GUARDAR NA BASE E REGISTAR"):
                 if n_nome:
                     try:
-                        with st.spinner("A atualizar base de dados..."):
-                            # Criar dicionário de dados completo
-                            dados_completos = {
-                                "Alimento": n_nome,
-                                "Kcal": n_kcal,
-                                "Proteina": n_prot,
-                                "Hidratos": n_hid,
-                                "Acucar": n_acu,
-                                "Lipidos": n_lip,
-                                "Saturadas": n_sat,
-                                "Fibras": n_fib,
-                                "Sal": n_sal
+                        with st.spinner("A processar..."):
+                            # 1. Dados originais (para a base de Novos Alimentos)
+                            dados_base = {
+                                "Alimento": n_nome, "Kcal": n_kcal, "Proteina": n_prot, "Hidratos": n_hid,
+                                "Acucar": n_acu, "Lipidos": n_lip, "Saturadas": n_sat, "Sal": 0.0
                             }
-                            
-                            # 1. Registar na aba Novos_Alimentos
                             df_n_atual = conn.read(worksheet="Novos_Alimentos", ttl=0)
-                            conn.update(worksheet="Novos_Alimentos", data=pd.concat([df_n_atual, pd.DataFrame([dados_completos])], ignore_index=True))
+                            conn.update(worksheet="Novos_Alimentos", data=pd.concat([df_n_atual, pd.DataFrame([dados_base])], ignore_index=True))
                             
-                            # 2. Registar no Diário (Sheet1)
-                            dados_diario = {"Data": str(data_sel), "Utilizador": user, **dados_completos}
+                            # 2. Dados calculados (para o Diário Sheet1)
+                            dados_diario = {
+                                "Data": str(data_sel), "Utilizador": user, "Alimento": n_nome,
+                                "Kcal": n_kcal * n_qtd, "Proteina": n_prot * n_qtd, "Hidratos": n_hid * n_qtd,
+                                "Acucar": n_acu * n_qtd, "Lipidos": n_lip * n_qtd, "Saturadas": n_sat * n_qtd, "Sal": 0.0
+                            }
                             df_s1_atual = conn.read(worksheet="Sheet1", ttl=0)
                             conn.update(worksheet="Sheet1", data=pd.concat([df_s1_atual, pd.DataFrame([dados_diario])], ignore_index=True))
                             
                             st.cache_data.clear()
-                            st.success(f"✅ {n_nome} guardado com sucesso!")
+                            st.success(f"✅ Registado: {n_nome} ({n_qtd} doses)")
                             time.sleep(1.5)
                             st.rerun()
                     except Exception as e:
-                        st.error(f"Erro na ligação: {e}")
+                        st.error(f"Erro: {e}")
                 else:
-                    st.warning("O nome do alimento é obrigatório.")
+                    st.warning("Introduz o nome do alimento.")
 
         elif alimento_sel:
+            # Lógica normal para alimentos que já existem no Excel
             row = df_alimentos[df_alimentos['ALIMENTO'] == alimento_sel].iloc[0]
             qtd = st.number_input("Quantidade (Doses/Coeficiente):", min_value=0.01, value=1.00, step=0.05)
             
@@ -143,31 +138,26 @@ if page == "Página Inicial / Registo":
                     if n in row: return float(row[n]) * qtd
                 return 0.0
 
-            # Mapeamento para todos os campos do Excel
             vals = {
                 "Kcal": get_v(['Calorias', 'Kcal']),
                 "Proteina": get_v(['Proteína', 'Proteina']),
                 "Hidratos": get_v(['Hidratos']),
-                "Acucar": get_v(['(açúcar)', 'Acucar', 'Açúcar', 'açúcar']),
+                "Acucar": get_v(['(açúcar)', 'Acucar', 'Açúcar']),
                 "Lipidos": get_v(['Lípidos', 'Lipidos']),
-                "Saturadas": get_v(['saturadas', 'Saturadas', 'Gorduras Saturadas']),
-                "Fibras": get_v(['Fibras', 'Fibra']),
+                "Saturadas": get_v(['saturadas', 'Saturadas']),
                 "Sal": get_v(['Sal'])
             }
             
             st.info(f"✨ {vals['Kcal']:.1f} kcal | {vals['Proteina']:.1f}g Proteína")
 
             if st.button("CONFIRMAR E GRAVAR"):
-                try:
-                    df_atual = conn.read(worksheet="Sheet1", ttl=0)
-                    nova_l = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": alimento_sel, **{k: round(v, 2) for k, v in vals.items()}}])
-                    conn.update(worksheet="Sheet1", data=pd.concat([df_atual, nova_l], ignore_index=True))
-                    st.cache_data.clear()
-                    st.success("Registado no diário!")
-                    time.sleep(1)
-                    st.rerun()
-                except:
-                    st.error("Erro ao gravar registo.")
+                df_atual = conn.read(worksheet="Sheet1", ttl=0)
+                nova_l = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": alimento_sel, **{k: round(v, 2) for k, v in vals.items()}}])
+                conn.update(worksheet="Sheet1", data=pd.concat([df_atual, nova_l], ignore_index=True))
+                st.cache_data.clear()
+                st.success("Registado!")
+                time.sleep(1)
+                st.rerun()
 
     with col2:
         st.subheader(f"Resumo de {data_sel}")
@@ -179,9 +169,7 @@ if page == "Página Inicial / Registo":
             
             if not dia_df.empty:
                 dia_df.insert(0, "Sel.", False)
-                # Tabela de exibição completa com scroll horizontal se necessário
-                display_cols = ["Sel.", "Alimento", "Kcal", "Proteina", "Hidratos", "Acucar", "Lipidos", "Saturadas", "Sal"]
-                # Filtrar apenas colunas que existam no DataFrame para evitar erro
+                display_cols = ["Sel.", "Alimento", "Kcal", "Proteina", "Hidratos", "Acucar", "Lipidos", "Saturadas"]
                 cols_to_show = [c for c in display_cols if c in dia_df.columns]
                 
                 edited_df = st.data_editor(
@@ -192,7 +180,6 @@ if page == "Página Inicial / Registo":
                 )
 
                 selected_indices = edited_df[edited_df["Sel."] == True].index
-
                 if len(selected_indices) > 0:
                     if st.button(f"🗑️ Apagar {len(selected_indices)} itens"):
                         df_final = df_h.drop(selected_indices)
@@ -206,7 +193,3 @@ if page == "Página Inicial / Registo":
                 m2.metric("Proteína", f"{dia_df['Proteina'].sum():.1f}g")
                 m3.metric("Açúcar", f"{dia_df['Acucar'].sum():.1f}g")
                 m4.metric("Sat.", f"{dia_df.get('Saturadas', pd.Series([0])).sum():.1f}g")
-            else:
-                st.info("Nenhum alimento registado hoje.")
-
-# (Restante do código para Estatísticas, Exercício e Câmara mantido...)
