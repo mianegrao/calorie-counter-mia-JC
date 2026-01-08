@@ -18,8 +18,8 @@ if "GEMINI_API_KEY" in st.secrets:
 # 2. Conexão Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 3. Carregar Base de Alimentos
-@st.cache_data(ttl=600)
+# 3. Carregar Base de Alimentos (Excel GitHub) - Cache de 1 hora
+@st.cache_data(ttl=3600)
 def load_food_data():
     try:
         df = pd.read_excel("alimentos.xlsx", sheet_name="Valor nutricional")
@@ -30,6 +30,15 @@ def load_food_data():
         return pd.DataFrame()
 
 df_alimentos = load_food_data()
+
+# --- FUNÇÃO DE LEITURA COM CACHE (Para evitar Erro 429) ---
+@st.cache_data(ttl=120) # Guarda os dados por 2 min para não sobrecarregar a Google
+def get_data_cached(worksheet_name):
+    try:
+        df = conn.read(worksheet=worksheet_name, ttl=0)
+        return df.dropna(how='all') if df is not None else pd.DataFrame()
+    except:
+        return pd.DataFrame()
 
 # --- NAVEGAÇÃO ---
 if "page" not in st.session_state:
@@ -50,14 +59,6 @@ page = st.sidebar.selectbox("Ir para:",
 user = st.sidebar.selectbox("Utilizador:", lista_users, index=def_idx)
 data_sel = st.sidebar.date_input("Data:", date.today())
 
-def get_data(worksheet_name="Sheet1"):
-    try:
-        # ttl=0 obriga a ler do Sheets e não da memória temporária
-        df = conn.read(worksheet=worksheet_name, ttl=0)
-        return df.dropna(how='all') if df is not None else pd.DataFrame()
-    except Exception as e:
-        return pd.DataFrame()
-
 # --- PÁGINA 1: REGISTO ---
 if page == "Página Inicial / Registo":
     st.header(f"📝 Diário de {user}")
@@ -70,35 +71,34 @@ if page == "Página Inicial / Registo":
             
             if alimento:
                 row = df_alimentos[df_alimentos['ALIMENTO'] == alimento].iloc[0]
-                qtd = st.number_input("Quantidade (Doses/Coeficiente):", min_value=0.01, value=1.00, step=0.05)
+                qtd = st.number_input("Quantidade:", min_value=0.01, value=1.00, step=0.05)
                 
                 def get_v(names):
                     for n in names:
                         if n in row: return float(row[n]) * qtd
                     return 0.0
 
-                vals = {"Kcal": get_v(['Calorias', 'Kcal']), "Proteina": get_v(['Proteína', 'Proteina']), "Hidratos": get_v(['Hidratos']), "Lipidos": get_v(['Lípidos', 'Lipidos']), "Acucar": get_v(['(açúcar)', 'Acucar', 'Açúcar', 'açúcar']), "Fibras": get_v(['Fibras']), "Sal": get_v(['Sal'])}
-                
-                st.info(f"✨ **{alimento}**: {vals['Kcal']:.1f} kcal | {vals['Proteina']:.1f}g Proteína")
+                vals = {"Kcal": get_v(['Calorias', 'Kcal']), "Proteina": get_v(['Proteína', 'Proteina']), "Hidratos": get_v(['Hidratos']), "Lipidos": get_v(['Lípidos', 'Lipidos']), "Acucar": get_v(['(açúcar)', 'Acucar', 'Açúcar']), "Fibras": get_v(['Fibras']), "Sal": get_v(['Sal'])}
+                st.info(f"✨ {vals['Kcal']:.1f} kcal | {vals['Proteina']:.1f}g Proteína")
 
                 if st.button("CONFIRMAR E GRAVAR"):
                     try:
-                        with st.spinner("A guardar no Google Sheets..."):
+                        with st.spinner("A guardar..."):
                             nova_linha = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": alimento, **{k: round(v, 2) for k, v in vals.items()}}])
-                            df_atual = get_data("Sheet1")
+                            # Aqui limpamos a cache para forçar a leitura dos dados novos após gravar
+                            st.cache_data.clear() 
+                            df_atual = conn.read(worksheet="Sheet1", ttl=0)
                             df_final = pd.concat([df_atual, nova_linha], ignore_index=True)
-                            
-                            # Tenta atualizar
                             conn.update(data=df_final)
-                            st.success(f"Gravado com sucesso!")
-                            time.sleep(1) # Pequena pausa para a Google processar
+                            st.success("Gravado!")
+                            time.sleep(1)
                             st.rerun()
                     except Exception as e:
-                        st.error(f"Erro de ligação com o Google Sheets. Por favor, tente novamente dentro de momentos. (Erro: {e})")
+                        st.error("A Google está sobrecarregada. Aguarde 30 segundos e tente de novo.")
 
     with col2:
         st.subheader(f"Resumo de {data_sel}")
-        df_h = get_data("Sheet1")
+        df_h = get_data_cached("Sheet1")
         if not df_h.empty:
             df_h['Data'] = df_h['Data'].astype(str)
             dia_df = df_h[(df_h['Data'] == str(data_sel)) & (df_h['Utilizador'] == user)].copy()
@@ -107,16 +107,14 @@ if page == "Página Inicial / Registo":
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
                 
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Total Energia", f"{dia_df['Kcal'].sum():.0f} kcal")
-                c2.metric("Total Proteína", f"{dia_df['Proteina'].sum():.1f}g")
-                c3.metric("Total Açúcar", f"{dia_df['Acucar'].sum():.1f}g")
+                c1.metric("Energia", f"{dia_df['Kcal'].sum():.0f} kcal")
+                c2.metric("Proteína", f"{dia_df['Proteina'].sum():.1f}g")
+                c3.metric("Açúcar", f"{dia_df['Acucar'].sum():.1f}g")
 
-                if st.button("🗑️ Apagar último registo"):
-                    try:
-                        df_res = df_h.drop(dia_df.index[-1])
-                        conn.update(data=df_res)
-                        st.rerun()
-                    except:
-                        st.error("Não foi possível apagar. Tente novamente.")
+                if st.button("🗑️ Apagar último"):
+                    st.cache_data.clear()
+                    df_res = df_h.drop(dia_df.index[-1])
+                    conn.update(data=df_res)
+                    st.rerun()
 
-# (Restante do código mantido igual...)
+# (Restante do código: Estatísticas, Exercício e Câmara usam get_data_cached)
