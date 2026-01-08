@@ -41,7 +41,6 @@ def load_combined_food_data():
     # 2. Carregar do Google Sheets (Novos_Alimentos)
     df_sheets = get_data_sheets("Novos_Alimentos")
     if not df_sheets.empty:
-        # Padronizar nomes de colunas para o merge
         df_sheets = df_sheets.rename(columns={"Alimento": "ALIMENTO"})
     
     # 3. Fundir as duas listas
@@ -69,54 +68,56 @@ if page == "Página Inicial / Registo":
     with col1:
         st.subheader("Novo Registo")
         
-        # A lista aqui já inclui os alimentos do Excel + os novos do Sheets
         alimento_sel = st.selectbox(
             "Pesquisar Alimento:", 
             options=df_alimentos['ALIMENTO'].unique(), 
             index=None, 
-            placeholder="Procurar (Excel ou Novos)..."
+            placeholder="Procurar no Excel ou Base de Novos..."
         )
 
         add_novo = st.checkbox("➕ Não existe? Adicionar à base permanentemente")
 
         if add_novo:
             st.markdown("---")
-            st.info("Adiciona uma vez e ele passará a aparecer na pesquisa acima.")
+            st.info("Valores por 100g ou dose. Ficará disponível para sempre após guardar.")
             n_nome = st.text_input("Nome do Alimento:")
+            
             c1, c2 = st.columns(2)
-            n_kcal = c1.number_input("Kcal (100g)", min_value=0.0)
-            n_prot = c2.number_input("Prot (g)", min_value=0.0)
+            n_kcal = c1.number_input("Kcal", min_value=0.0, step=1.0)
+            n_prot = c2.number_input("Proteína (g)", min_value=0.0, step=0.1)
+            
             c3, c4 = st.columns(2)
-            n_hid = c3.number_input("Hidratos (g)", min_value=0.0)
-            n_acu = c4.number_input("Açúcar (g)", min_value=0.0)
+            n_hid = c3.number_input("Hidratos (g)", min_value=0.0, step=0.1)
+            n_acu = c4.number_input("Açúcar (g)", min_value=0.0, step=0.1)
+            
             c5, c6 = st.columns(2)
-            n_lip = c5.number_input("Lípidos (g)", min_value=0.0)
-            n_sat = c6.number_input("Sat (g)", min_value=0.0)
+            n_lip = c5.number_input("Lípidos (g)", min_value=0.0, step=0.1)
+            n_sat = c6.number_input("Saturadas (g)", min_value=0.0, step=0.1)
+            
+            c7, c8 = st.columns(2)
+            n_fib = c7.number_input("Fibra (g)", min_value=0.0, step=0.1)
+            n_sal = c8.number_input("Sal (g)", min_value=0.0, step=0.01)
             
             if st.button("💾 GUARDAR NA BASE PERMANENTE"):
                 if n_nome:
                     novo_item = pd.DataFrame([{
                         "Alimento": n_nome, "Kcal": n_kcal, "Proteina": n_prot, 
-                        "Hidratos": n_hid, "Acucar": n_acu, "Lipidos": n_lip, "Saturadas": n_sat
+                        "Hidratos": n_hid, "Acucar": n_acu, "Lipidos": n_lip, 
+                        "Saturadas": n_sat, "Fibra": n_fib, "Sal": n_sal
                     }])
                     df_n_atual = conn.read(worksheet="Novos_Alimentos", ttl=0)
                     conn.update(worksheet="Novos_Alimentos", data=pd.concat([df_n_atual, novo_item], ignore_index=True))
-                    st.cache_data.clear() # Limpa para forçar a leitura da nova lista fundida
-                    st.success("Alimento guardado! Já o podes pesquisar acima.")
+                    st.cache_data.clear()
+                    st.success("Guardado! Agora já o podes pesquisar na lista acima.")
                     time.sleep(1)
                     st.rerun()
         
         elif alimento_sel:
-            # Funciona para qualquer alimento (do Excel ou do Sheets)
             row = df_alimentos[df_alimentos['ALIMENTO'] == alimento_sel].iloc[0]
             qtd = st.number_input("Quantidade / Coeficiente:", min_value=0.01, value=1.00, step=0.05)
             
             def get_v(names):
                 for n in names:
-                    if n in row and pd.notnull(row[n]): return float(row[n]) * qtd
-                # Tentar nomes alternativos se o merge mudou a capitalização
-                alt_n = [n.capitalize() for n in names]
-                for n in alt_n:
                     if n in row and pd.notnull(row[n]): return float(row[n]) * qtd
                 return 0.0
 
@@ -126,7 +127,9 @@ if page == "Página Inicial / Registo":
                 "Hidratos": get_v(['Hidratos', 'Hidratos de Carbono']),
                 "Acucar": get_v(['Acucar', 'Açúcar', '(açúcar)']),
                 "Lipidos": get_v(['Lipidos', 'Lípidos']),
-                "Saturadas": get_v(['Saturadas', 'saturadas'])
+                "Saturadas": get_v(['Saturadas', 'saturadas']),
+                "Fibra": get_v(['Fibra', 'Fibras']),
+                "Sal": get_v(['Sal'])
             }
             
             st.info(f"✨ {vals['Kcal']:.1f} kcal | {vals['Proteina']:.1f}g Prot")
@@ -136,7 +139,7 @@ if page == "Página Inicial / Registo":
                 nova_l = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": alimento_sel, **{k: round(v, 2) for k, v in vals.items()}}])
                 conn.update(worksheet="Sheet1", data=pd.concat([df_atual, nova_l], ignore_index=True))
                 st.cache_data.clear()
-                st.success("Registado!")
+                st.success("Registado no diário!")
                 time.sleep(1)
                 st.rerun()
 
@@ -150,11 +153,12 @@ if page == "Página Inicial / Registo":
             
             if not dia_df.empty:
                 dia_df.insert(0, "Sel.", False)
-                display_cols = ["Sel.", "Alimento", "Kcal", "Proteina", "Hidratos", "Acucar", "Lipidos", "Saturadas"]
+                # Adicionadas colunas de Fibra e Sal à visualização
+                display_cols = ["Sel.", "Alimento", "Kcal", "Proteina", "Acucar", "Saturadas", "Fibra", "Sal"]
                 cols_to_show = [c for c in display_cols if c in dia_df.columns]
                 
                 edited_df = st.data_editor(
-                    dia_df[cols_to_show],
+                    dia_df[cols_to_show].rename(columns={"Proteina": "Prot", "Acucar": "Açúcar", "Saturadas": "Sat"}),
                     hide_index=True,
                     column_config={"Sel.": st.column_config.CheckboxColumn(required=True)},
                     use_container_width=True
@@ -169,9 +173,8 @@ if page == "Página Inicial / Registo":
                         st.rerun()
                 
                 st.markdown("---")
-                m1, m2, m3 = st.columns(3)
+                m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Kcal", f"{dia_df['Kcal'].sum():.0f}")
                 m2.metric("Proteína", f"{dia_df['Proteina'].sum():.1f}g")
                 m3.metric("Açúcar", f"{dia_df['Acucar'].sum():.1f}g")
-
-# (Seções de Exercício e Câmara mantêm-se iguais...)
+                m4.metric("Fibra", f"{dia_df.get('Fibra', pd.Series([0])).sum():.1f}g")
