@@ -79,41 +79,43 @@ if page == "Página Inicial / Registo":
 
         if add_novo:
             st.markdown("---")
-            with st.form("form_novo_alimento", clear_on_submit=True):
-                n_nome = st.text_input("Nome do Alimento:")
-                c1, c2 = st.columns(2)
-                n_kcal = c1.number_input("Kcal (por 100g/dose)", min_value=0.0, step=1.0)
-                n_prot = c2.number_input("Proteína (g)", min_value=0.0, step=0.1)
-                c3, c4 = st.columns(2)
-                n_hid = c3.number_input("Hidratos (g)", min_value=0.0, step=0.1)
-                n_lip = c4.number_input("Lípidos (g)", min_value=0.0, step=0.1)
-                c5, c6 = st.columns(2)
-                n_acu = c5.number_input("Açúcar (g)", min_value=0.0, step=0.1)
-                n_fib = c6.number_input("Fibras (g)", min_value=0.0, step=0.1)
-                n_sal = st.number_input("Sal (g)", min_value=0.0, step=0.01)
-                
-                submitted = st.form_submit_button("💾 GUARDAR E REGISTAR")
-                if submitted:
-                    if n_nome:
-                        try:
-                            # 1. Atualizar Novos_Alimentos
-                            df_novos = get_data_cached("Novos_Alimentos")
-                            novo_item = pd.DataFrame([{"Alimento": n_nome, "Kcal": n_kcal, "Proteina": n_prot, "Hidratos": n_hid, "Lipidos": n_lip, "Acucar": n_acu, "Fibras": n_fib, "Sal": n_sal}])
-                            conn.update(worksheet="Novos_Alimentos", data=pd.concat([df_novos, novo_item], ignore_index=True))
+            n_nome = st.text_input("Nome do Alimento:", key="manual_n_nome")
+            c1, c2 = st.columns(2)
+            n_kcal = c1.number_input("Kcal (100g/dose)", min_value=0.0, step=1.0, key="manual_kcal")
+            n_prot = c2.number_input("Proteína (g)", min_value=0.0, step=0.1, key="manual_prot")
+            c3, c4 = st.columns(2)
+            n_hid = c3.number_input("Hidratos (g)", min_value=0.0, step=0.1, key="manual_hid")
+            n_lip = c4.number_input("Lípidos (g)", min_value=0.0, step=0.1, key="manual_lip")
+            
+            if st.button("💾 GUARDAR E REGISTAR NOVO ALIMENTO"):
+                if n_nome:
+                    try:
+                        with st.spinner("A guardar no Google Sheets..."):
+                            # 1. Registar na aba Novos_Alimentos (Base de Dados)
+                            item_base = pd.DataFrame([{
+                                "Alimento": n_nome, "Kcal": n_kcal, "Proteina": n_prot, 
+                                "Hidratos": n_hid, "Lipidos": n_lip, "Acucar": 0.0, "Fibras": 0.0, "Sal": 0.0
+                            }])
+                            df_n_atual = conn.read(worksheet="Novos_Alimentos", ttl=0)
+                            conn.update(worksheet="Novos_Alimentos", data=pd.concat([df_n_atual, item_base], ignore_index=True))
                             
-                            # 2. Atualizar Diário (Sheet1)
-                            df_diario = conn.read(worksheet="Sheet1", ttl=0)
-                            nova_l = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": n_nome, "Kcal": n_kcal, "Proteina": n_prot, "Hidratos": n_hid, "Lipidos": n_lip, "Acucar": n_acu, "Fibras": n_fib, "Sal": n_sal}])
-                            conn.update(worksheet="Sheet1", data=pd.concat([df_diario, nova_l], ignore_index=True))
+                            # 2. Registar no Diário de hoje (Sheet1)
+                            item_diario = pd.DataFrame([{
+                                "Data": str(data_sel), "Utilizador": user, "Alimento": n_nome,
+                                "Kcal": n_kcal, "Proteina": n_prot, "Hidratos": n_hid, "Lipidos": n_lip,
+                                "Acucar": 0.0, "Fibras": 0.0, "Sal": 0.0
+                            }])
+                            df_s1_atual = conn.read(worksheet="Sheet1", ttl=0)
+                            conn.update(worksheet="Sheet1", data=pd.concat([df_s1_atual, item_diario], ignore_index=True))
                             
                             st.cache_data.clear()
-                            st.success(f"✅ {n_nome} adicionado!")
-                            time.sleep(1)
+                            st.success(f"✅ {n_nome} registado!")
+                            time.sleep(1.5)
                             st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao ligar ao Sheets: {e}")
-                    else:
-                        st.warning("Introduza o nome do alimento.")
+                    except Exception as e:
+                        st.error(f"Erro: {e}. Verifique se a aba 'Novos_Alimentos' existe no Sheets.")
+                else:
+                    st.warning("Introduza o nome do alimento.")
 
         elif alimento_sel:
             row = df_alimentos[df_alimentos['ALIMENTO'] == alimento_sel].iloc[0]
@@ -144,13 +146,11 @@ if page == "Página Inicial / Registo":
         df_h = get_data_cached("Sheet1")
         if not df_h.empty:
             df_h['Data'] = df_h['Data'].astype(str)
-            # Filtramos para obter os índices originais do Excel/Sheets
-            user_day_mask = (df_h['Data'] == str(data_sel)) & (df_h['Utilizador'] == user)
-            dia_df = df_h[user_day_mask].copy()
+            mask = (df_h['Data'] == str(data_sel)) & (df_h['Utilizador'] == user)
+            dia_df = df_h[mask].copy()
             
             if not dia_df.empty:
                 dia_df.insert(0, "Sel.", False)
-                # Exibição com nomes corretos
                 display_df = dia_df.rename(columns={"Proteina": "Proteína", "Lipidos": "Lípidos", "Acucar": "Açúcar"})
                 
                 edited_df = st.data_editor(
@@ -160,17 +160,13 @@ if page == "Página Inicial / Registo":
                     use_container_width=True
                 )
 
-                # Identificar linhas selecionadas no DataFrame original (df_h)
-                # O editor mantém o alinhamento de índice se não for resetado
                 selected_indices = edited_df[edited_df["Sel."] == True].index
 
                 if len(selected_indices) > 0:
-                    if st.button(f"🗑️ Apagar {len(selected_indices)} selecionado(s)"):
+                    if st.button(f"🗑️ Apagar {len(selected_indices)} itens"):
                         df_final = df_h.drop(selected_indices)
                         conn.update(worksheet="Sheet1", data=df_final)
                         st.cache_data.clear()
-                        st.success("Eliminado!")
-                        time.sleep(1)
                         st.rerun()
                 
                 st.markdown("---")
@@ -179,9 +175,9 @@ if page == "Página Inicial / Registo":
                 m2.metric("Proteína", f"{dia_df['Proteina'].sum():.1f}g")
                 m3.metric("Açúcar", f"{dia_df['Acucar'].sum():.1f}g")
             else:
-                st.info("Nenhum registo hoje.")
+                st.info("Sem registos hoje.")
 
-# --- RESTANTE DAS PÁGINAS ---
+# --- OUTRAS PÁGINAS ---
 elif page == "Estatísticas & Médias":
     st.header(f"📊 Estatísticas - {user}")
     df_h = get_data_cached("Sheet1")
@@ -195,7 +191,7 @@ elif page == "Estatísticas & Médias":
 
 elif page == "Registo de Exercício":
     st.header("🏃 Exercício")
-    tipo = st.selectbox("Atividade:", ["Treino Força", "Corrida", "Caminhada", "Yoga"])
+    tipo = st.selectbox("Atividade:", ["Treino Força", "Corrida", "Caminhada", "Yoga", "Remo"])
     tempo = st.number_input("Minutos:", min_value=1, value=45)
     if st.button("GRAVAR TREINO"):
         df_ex = get_data_cached("Exercicio")
@@ -212,11 +208,11 @@ elif page == "Câmara IA":
         with st.spinner("Analisando..."):
             res = model.generate_content(["Identifica valores por 100g: Alimento, Kcal, Proteina, Hidratos, Lipidos, Acucar, Fibras, Sal. Responde apenas JSON.", img])
             try:
-                clean_json = res.text.replace('```json', '').replace('```', '').strip()
-                data = json.loads(clean_json)
-                st.write(data)
-                if st.button("💾 Guardar na Base"):
+                data_ia = json.loads(res.text.replace('```json', '').replace('```', '').strip())
+                st.write("Dados Extraídos:", data_ia)
+                if st.button("💾 Guardar no Back Desk"):
                     df_n = get_data_cached("Novos_Alimentos")
-                    conn.update(worksheet="Novos_Alimentos", data=pd.concat([df_n, pd.DataFrame([data])], ignore_index=True))
+                    conn.update(worksheet="Novos_Alimentos", data=pd.concat([df_n, pd.DataFrame([data_ia])], ignore_index=True))
+                    st.cache_data.clear()
                     st.success("Guardado!")
-            except: st.error("Erro na leitura.")
+            except: st.error("Erro na leitura da imagem.")
