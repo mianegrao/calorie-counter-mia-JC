@@ -38,27 +38,42 @@ def safe_update(worksheet, data, max_retries=3):
 def get_data_sheets(worksheet_name):
     try:
         df = conn.read(worksheet=worksheet_name, ttl=0)
-        return df.dropna(how='all') if df is not None else pd.DataFrame()
+        if df is None or df.empty:
+            return pd.DataFrame()
+        return df.dropna(how='all')
     except:
         return pd.DataFrame()
 
 @st.cache_data(ttl=600)
 def load_combined_food_data():
     try:
-        # Excel Original
+        # 1. Carregar Excel (GitHub)
         df_excel = pd.read_excel("alimentos.xlsx", sheet_name="Valor nutricional")
         df_excel.columns = df_excel.columns.str.strip()
-        df_excel = df_excel.dropna(subset=['ALIMENTO'])
+        df_excel = df_excel.dropna(subset=['ALIMENTO']).reset_index(drop=True)
     except:
         df_excel = pd.DataFrame()
 
-    # Google Sheets (Novos_Alimentos)
+    # 2. Carregar Google Sheets (Novos_Alimentos)
     df_sheets = get_data_sheets("Novos_Alimentos")
+    if not df_sheets.empty:
+        df_sheets.columns = df_sheets.columns.str.strip()
+        df_sheets = df_sheets.reset_index(drop=True)
     
-    # Fundir as listas
-    df_final = pd.concat([df_excel, df_sheets], ignore_index=True)
-    return df_final.drop_duplicates(subset=['ALIMENTO'], keep='last').sort_values(by='ALIMENTO')
+    # 3. Fundir com segurança (evitando InvalidIndexError)
+    if df_excel.empty and df_sheets.empty:
+        return pd.DataFrame(columns=["ALIMENTO", "Proteína", "Hidratos", "(açúcar)", "Lípidos", "(satur.)", "Fibras", "Sal", "Calorias"])
+    
+    # Concatenar e remover duplicados por nome de alimento
+    df_combined = pd.concat([df_excel, df_sheets], axis=0, ignore_index=True)
+    
+    # Manter apenas a última entrada de cada alimento e remover duplicados de colunas se existirem
+    df_combined = df_combined.loc[:, ~df_combined.columns.duplicated()]
+    df_combined = df_combined.drop_duplicates(subset=['ALIMENTO'], keep='last')
+    
+    return df_combined.sort_values(by='ALIMENTO')
 
+# Carregar lista consolidada
 df_alimentos = load_combined_food_data()
 
 # --- NAVEGAÇÃO ---
@@ -76,13 +91,14 @@ if page == "Página Inicial / Registo":
     
     with col1:
         st.subheader("Novo Registo")
-        alimento_sel = st.selectbox("Pesquisar Alimento:", options=df_alimentos['ALIMENTO'].unique(), index=None, placeholder="Procurar...")
+        opcoes = df_alimentos['ALIMENTO'].unique() if not df_alimentos.empty else []
+        alimento_sel = st.selectbox("Pesquisar Alimento:", options=opcoes, index=None, placeholder="Procurar...")
 
         add_novo = st.checkbox("➕ Não existe? Adicionar à base permanentemente")
 
         if add_novo:
             st.markdown("---")
-            st.info("Layout idêntico ao Excel (Valores por 100g/dose).")
+            st.info("Layout: ALIMENTO | Prot | Hid | Açúcar | Líp | Sat | Fib | Sal | Kcal")
             n_nome = st.text_input("Nome do Alimento (ALIMENTO):")
             
             c1, c2 = st.columns(2)
@@ -104,34 +120,28 @@ if page == "Página Inicial / Registo":
             if st.button("💾 GUARDAR NA BASE PERMANENTE"):
                 if n_nome:
                     try:
-                        with st.spinner("A guardar no layout correto..."):
-                            # Criar dicionário com a ORDEM EXATA do teu pedido
+                        with st.spinner("A guardar..."):
                             novo_item = pd.DataFrame([{
-                                "ALIMENTO": n_nome,
-                                "Proteína": n_prot,
-                                "Hidratos": n_hid,
-                                "(açúcar)": n_acu,
-                                "Lípidos": n_lip,
-                                "(satur.)": n_sat,
-                                "Fibras": n_fib,
-                                "Sal": n_sal,
-                                "Calorias": n_kcal
+                                "ALIMENTO": n_nome, "Proteína": n_prot, "Hidratos": n_hid,
+                                "(açúcar)": n_acu, "Lípidos": n_lip, "(satur.)": n_sat,
+                                "Fibras": n_fib, "Sal": n_sal, "Calorias": n_kcal
                             }])
                             
                             df_n_atual = conn.read(worksheet="Novos_Alimentos", ttl=0)
-                            # Garantir que as colunas seguem a ordem correta na fusão
+                            if df_n_atual is None: df_n_atual = pd.DataFrame()
+                            
                             df_n_final = pd.concat([df_n_atual, novo_item], ignore_index=True)
-                            df_n_final = df_n_final[["ALIMENTO", "Proteína", "Hidratos", "(açúcar)", "Lípidos", "(satur.)", "Fibras", "Sal", "Calorias"]]
+                            # Forçar ordem de colunas
+                            cols = ["ALIMENTO", "Proteína", "Hidratos", "(açúcar)", "Lípidos", "(satur.)", "Fibras", "Sal", "Calorias"]
+                            df_n_final = df_n_final[cols]
                             
                             safe_update("Novos_Alimentos", df_n_final)
                             st.cache_data.clear()
-                            st.success("Guardado na base com o layout do Excel!")
+                            st.success("Guardado!")
                             time.sleep(1)
                             st.rerun()
                     except Exception as e:
-                        st.error(f"Erro no Google Sheets: {e}")
-                else:
-                    st.warning("O nome é obrigatório.")
+                        st.error(f"Erro no Sheets: {e}")
         
         elif alimento_sel:
             row = df_alimentos[df_alimentos['ALIMENTO'] == alimento_sel].iloc[0]
@@ -178,14 +188,11 @@ if page == "Página Inicial / Registo":
             
             if not dia_df.empty:
                 dia_df.insert(0, "Sel.", False)
-                display_cols = ["Sel.", "Alimento", "Calorias", "Proteína", "(açúcar)", "(satur.)", "Fibras", "Sal"]
+                display_cols = ["Sel.", "Alimento", "Calorias", "Proteína", "(açúcar)", "Fibras"]
                 cols_to_show = [c for c in display_cols if c in dia_df.columns]
                 
                 st.data_editor(dia_df[cols_to_show], hide_index=True, use_container_width=True)
                 
                 st.markdown("---")
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Kcal", f"{dia_df['Calorias'].sum():.0f}")
-                m2.metric("Proteína", f"{dia_df['Proteína'].sum():.1f}g")
-                m3.metric("Açúcar", f"{dia_df['(açúcar)'].sum():.1f}g")
-                m4.metric("Fibras", f"{dia_df['Fibras'].sum():.1f}g")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Kcal", f"{dia_df['Calor
