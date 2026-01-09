@@ -26,8 +26,8 @@ if "edit_mode" not in st.session_state:
 def safe_update(worksheet, data, max_retries=3):
     for i in range(max_retries):
         try:
-            # Limpeza de colunas temporárias antes de gravar
             df_to_save = data.copy()
+            # Garante que a coluna Qtd/Coef existe no Sheets para futuras edições
             if "Qtd/Coef" not in df_to_save.columns:
                 df_to_save["Qtd/Coef"] = 1.0
             conn.update(worksheet=worksheet, data=df_to_save)
@@ -73,14 +73,14 @@ page = st.sidebar.selectbox("Ir para:", ["Diário / Registo", "Estatísticas", "
 
 if page == "Diário / Registo":
     st.header(f"📝 Diário de {user}")
-    col1, col2 = st.columns([1, 1.4])
+    col1, col2 = st.columns([1, 2.2]) # Coluna da tabela ligeiramente maior para legibilidade
     
     with col1:
-        # Se estivermos em modo de edição, o formulário muda
+        # LÓGICA DO FORMULÁRIO (ESQUERDA)
         if st.session_state.edit_mode:
             st.subheader("✏️ Editar Registo")
             alimento_sel = st.session_state.edit_alimento
-            st.info(f"A editar: **{alimento_sel}**")
+            st.warning(f"A editar: **{alimento_sel}**")
         else:
             st.subheader("Novo Registo")
             opcoes = df_alimentos['ALIMENTO'].unique() if not df_alimentos.empty else []
@@ -88,10 +88,8 @@ if page == "Diário / Registo":
 
         if alimento_sel:
             row = df_alimentos[df_alimentos['ALIMENTO'] == alimento_sel].iloc[0]
-            
-            # O valor inicial do slider/number muda se for edição
             default_qtd = st.session_state.edit_qtd if st.session_state.edit_mode else 1.0
-            qtd = st.number_input("Quantidade / Coeficiente:", min_value=0.01, value=float(default_qtd), step=0.05, key="input_qtd")
+            qtd = st.number_input("Quantidade / Coeficiente:", min_value=0.01, value=float(default_qtd), step=0.05, key="form_qtd")
             
             def get_v(names, q):
                 for n in names:
@@ -103,34 +101,30 @@ if page == "Diário / Registo":
                     "(satur.)": get_v(['(satur.)', 'Saturadas'], qtd), "Fibras": get_v(['Fibras', 'Fibra'], qtd),
                     "Sal": get_v(['Sal'], qtd), "Calorias": get_v(['Calorias', 'Kcal'], qtd)}
 
-            st.write(f"📊 **Resultado:** {vals['Calorias']:.1f} Kcal | {vals['Proteína']:.1f}g Prot")
+            st.info(f"💡 {vals['Calorias']:.1f} Kcal | {vals['Proteína']:.1f}g Prot")
 
             if st.session_state.edit_mode:
-                c_ed1, c_ed2 = st.columns(2)
-                if c_ed1.button("💾 ATUALIZAR REGISTO", type="primary"):
+                if st.button("💾 ATUALIZAR", type="primary", use_container_width=True):
                     df_h = get_data_sheets("Sheet1")
                     idx = st.session_state.edit_index
-                    # Atualiza a linha existente
                     for k, v in vals.items():
                         df_h.at[idx, k] = v
                     df_h.at[idx, "Qtd/Coef"] = qtd
                     if safe_update("Sheet1", df_h):
                         st.session_state.edit_mode = False
                         st.cache_data.clear()
-                        st.success("Atualizado!")
-                        time.sleep(0.5); st.rerun()
-                
-                if c_ed2.button("❌ Cancelar"):
-                    st.session_state.edit_mode = False
-                    st.rerun()
+                        st.success("Atualizado!"); time.sleep(0.5); st.rerun()
+                if st.button("❌ Cancelar", use_container_width=True):
+                    st.session_state.edit_mode = False; st.rerun()
             else:
-                if st.button("✅ CONFIRMAR REGISTO"):
+                if st.button("✅ CONFIRMAR REGISTO", use_container_width=True):
                     df_h = get_data_sheets("Sheet1")
                     novo_reg = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": alimento_sel, "Qtd/Coef": qtd, **vals}])
                     if safe_update("Sheet1", pd.concat([df_h, novo_reg], ignore_index=True)):
                         st.cache_data.clear(); st.success("Registado!"); time.sleep(0.5); st.rerun()
 
     with col2:
+        # LÓGICA DA TABELA (DIREITA)
         st.subheader(f"Resumo: {data_sel}")
         df_h = get_data_sheets("Sheet1")
         if not df_h.empty:
@@ -139,24 +133,30 @@ if page == "Diário / Registo":
             dia_df = df_h[dia_mask].copy()
             
             if not dia_df.empty:
-                # Criamos uma tabela visual, mas com botões de ação
+                # Mostramos a tabela nutricional completa
+                cols_view = ["Alimento", "Calorias", "Proteína", "Hidratos", "(açúcar)", "Lípidos", "Fibras"]
+                st.dataframe(dia_df[cols_view], use_container_width=True, hide_index=True)
+
+                # Botões de ação por baixo da tabela para não quebrar a visualização
+                st.write("---")
+                st.write("**Ações sobre os registos acima:**")
+                
+                # Criamos uma linha para cada alimento com botões pequenos
                 for idx, row_dia in dia_df.iterrows():
-                    with st.expander(f"🍴 {row_dia['Alimento']} - {row_dia['Calorias']:.0f} Kcal"):
-                        col_ex1, col_ex2 = st.columns(2)
+                    c_n, c_e, c_d = st.columns([3, 1, 1])
+                    c_n.write(f"🍴 {row_dia['Alimento']}")
+                    
+                    if c_e.button("✏️", key=f"btn_ed_{idx}", help="Editar este alimento"):
+                        st.session_state.edit_mode = True
+                        st.session_state.edit_index = idx
+                        st.session_state.edit_alimento = row_dia['Alimento']
+                        st.session_state.edit_qtd = row_dia.get('Qtd/Coef', 1.0)
+                        st.rerun()
                         
-                        if col_ex1.button("✏️ Editar", key=f"edit_{idx}"):
-                            st.session_state.edit_mode = True
-                            st.session_state.edit_index = idx
-                            st.session_state.edit_alimento = row_dia['Alimento']
-                            st.session_state.edit_qtd = row_dia.get('Qtd/Coef', 1.0)
-                            st.rerun()
-                            
-                        if col_ex2.button("🗑️ Apagar", key=f"del_{idx}"):
-                            df_final = df_h.drop(idx)
-                            if safe_update("Sheet1", df_final):
-                                st.cache_data.clear(); st.success("Apagado!"); st.rerun()
-                        
-                        st.write(f"Prot: {row_dia['Proteína']:.1f}g | Hid: {row_dia['Hidratos']:.1f}g | Fib: {row_dia['Fibras']:.1f}g")
+                    if c_d.button("🗑️", key=f"btn_del_{idx}", help="Apagar este alimento"):
+                        df_final = df_h.drop(idx)
+                        if safe_update("Sheet1", df_final):
+                            st.cache_data.clear(); st.success("Apagado!"); time.sleep(0.5); st.rerun()
 
                 st.markdown("---")
                 m1, m2, m3 = st.columns(3)
