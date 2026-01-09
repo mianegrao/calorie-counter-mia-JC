@@ -14,14 +14,22 @@ if "GEMINI_API_KEY" in st.secrets:
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# --- ESTADO DA SESSÃO (Para Edição) ---
+if "edit_mode" not in st.session_state:
+    st.session_state.edit_mode = False
+    st.session_state.edit_index = None
+    st.session_state.edit_alimento = None
+    st.session_state.edit_qtd = 1.0
+
 # --- FUNÇÕES DE SUPORTE ---
 
 def safe_update(worksheet, data, max_retries=3):
     for i in range(max_retries):
         try:
-            # Remove colunas auxiliares antes de enviar para o Sheets
-            cols_to_drop = ["Sel.", "Qtd/Coef"]
-            df_to_save = data.drop(columns=[c for c in cols_to_drop if c in data.columns])
+            # Limpeza de colunas temporárias antes de gravar
+            df_to_save = data.copy()
+            if "Qtd/Coef" not in df_to_save.columns:
+                df_to_save["Qtd/Coef"] = 1.0
             conn.update(worksheet=worksheet, data=df_to_save)
             return True
         except Exception as e:
@@ -68,15 +76,23 @@ if page == "Diário / Registo":
     col1, col2 = st.columns([1, 1.4])
     
     with col1:
-        st.subheader("Novo Registo")
-        opcoes = df_alimentos['ALIMENTO'].unique() if not df_alimentos.empty else []
-        alimento_sel = st.selectbox("Pesquisar Alimento:", options=opcoes, index=None)
+        # Se estivermos em modo de edição, o formulário muda
+        if st.session_state.edit_mode:
+            st.subheader("✏️ Editar Registo")
+            alimento_sel = st.session_state.edit_alimento
+            st.info(f"A editar: **{alimento_sel}**")
+        else:
+            st.subheader("Novo Registo")
+            opcoes = df_alimentos['ALIMENTO'].unique() if not df_alimentos.empty else []
+            alimento_sel = st.selectbox("Pesquisar Alimento:", options=opcoes, index=None)
 
         if alimento_sel:
             row = df_alimentos[df_alimentos['ALIMENTO'] == alimento_sel].iloc[0]
-            qtd = st.number_input("Quantidade / Coeficiente:", min_value=0.01, value=1.00, step=0.05)
             
-            # Cálculo dos valores
+            # O valor inicial do slider/number muda se for edição
+            default_qtd = st.session_state.edit_qtd if st.session_state.edit_mode else 1.0
+            qtd = st.number_input("Quantidade / Coeficiente:", min_value=0.01, value=float(default_qtd), step=0.05, key="input_qtd")
+            
             def get_v(names, q):
                 for n in names:
                     if n in row and pd.notnull(row[n]): return float(row[n]) * q
@@ -87,14 +103,32 @@ if page == "Diário / Registo":
                     "(satur.)": get_v(['(satur.)', 'Saturadas'], qtd), "Fibras": get_v(['Fibras', 'Fibra'], qtd),
                     "Sal": get_v(['Sal'], qtd), "Calorias": get_v(['Calorias', 'Kcal'], qtd)}
 
-            st.info(f"A registar: {vals['Calorias']:.1f} Kcal | {vals['Proteína']:.1f}g Prot")
+            st.write(f"📊 **Resultado:** {vals['Calorias']:.1f} Kcal | {vals['Proteína']:.1f}g Prot")
 
-            if st.button("✅ CONFIRMAR REGISTO"):
-                df_h = get_data_sheets("Sheet1")
-                # Guardamos também o coeficiente para podermos editar depois
-                novo_reg = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": alimento_sel, "Qtd/Coef": qtd, **vals}])
-                safe_update("Sheet1", pd.concat([df_h, novo_reg], ignore_index=True))
-                st.cache_data.clear(); st.success("Registado!"); time.sleep(0.5); st.rerun()
+            if st.session_state.edit_mode:
+                c_ed1, c_ed2 = st.columns(2)
+                if c_ed1.button("💾 ATUALIZAR REGISTO", type="primary"):
+                    df_h = get_data_sheets("Sheet1")
+                    idx = st.session_state.edit_index
+                    # Atualiza a linha existente
+                    for k, v in vals.items():
+                        df_h.at[idx, k] = v
+                    df_h.at[idx, "Qtd/Coef"] = qtd
+                    if safe_update("Sheet1", df_h):
+                        st.session_state.edit_mode = False
+                        st.cache_data.clear()
+                        st.success("Atualizado!")
+                        time.sleep(0.5); st.rerun()
+                
+                if c_ed2.button("❌ Cancelar"):
+                    st.session_state.edit_mode = False
+                    st.rerun()
+            else:
+                if st.button("✅ CONFIRMAR REGISTO"):
+                    df_h = get_data_sheets("Sheet1")
+                    novo_reg = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": alimento_sel, "Qtd/Coef": qtd, **vals}])
+                    if safe_update("Sheet1", pd.concat([df_h, novo_reg], ignore_index=True)):
+                        st.cache_data.clear(); st.success("Registado!"); time.sleep(0.5); st.rerun()
 
     with col2:
         st.subheader(f"Resumo: {data_sel}")
@@ -105,60 +139,29 @@ if page == "Diário / Registo":
             dia_df = df_h[dia_mask].copy()
             
             if not dia_df.empty:
-                # Se a coluna Qtd/Coef não existir em registos antigos, assume 1.0
-                if "Qtd/Coef" not in dia_df.columns: dia_df["Qtd/Coef"] = 1.0
-                
-                dia_df.insert(0, "Sel.", False)
-                # Tabela de visualização com o Coeficiente editável
-                cols_view = ["Sel.", "Alimento", "Qtd/Coef", "Calorias", "Proteína", "Hidratos", "Fibras"]
-                
-                edited_df = st.data_editor(
-                    dia_df[cols_view], 
-                    hide_index=False, 
-                    use_container_width=True,
-                    column_config={
-                        "Alimento": st.column_config.Column(disabled=True),
-                        "Calorias": st.column_config.Column(disabled=True),
-                        "Proteína": st.column_config.Column(disabled=True),
-                        "Hidratos": st.column_config.Column(disabled=True),
-                        "Fibras": st.column_config.Column(disabled=True),
-                        "Qtd/Coef": st.column_config.NumberColumn(format="%.2f", min_value=0.01)
-                    }
-                )
-
-                c_b1, c_b2 = st.columns(2)
-                
-                if c_b1.button("🗑️ Apagar Selecionados"):
-                    ids_to_drop = edited_df[edited_df["Sel."] == True].index
-                    df_final = df_h.drop(ids_to_drop)
-                    if safe_update("Sheet1", df_final):
-                        st.cache_data.clear(); st.success("Eliminado!"); st.rerun()
-
-                if c_b2.button("💾 Recalcular e Guardar"):
-                    # Lógica para recalcular tudo com base no novo coeficiente
-                    for idx in edited_df.index:
-                        novo_coef = edited_df.at[idx, "Qtd/Coef"]
-                        velho_coef = dia_df.at[idx, "Qtd/Coef"]
+                # Criamos uma tabela visual, mas com botões de ação
+                for idx, row_dia in dia_df.iterrows():
+                    with st.expander(f"🍴 {row_dia['Alimento']} - {row_dia['Calorias']:.0f} Kcal"):
+                        col_ex1, col_ex2 = st.columns(2)
                         
-                        if novo_coef != velho_coef:
-                            # Encontrar o alimento na base original para saber os valores por unidade
-                            nome_ali = dia_df.at[idx, "Alimento"]
-                            base_ali = df_alimentos[df_alimentos['ALIMENTO'] == nome_ali].iloc[0]
+                        if col_ex1.button("✏️ Editar", key=f"edit_{idx}"):
+                            st.session_state.edit_mode = True
+                            st.session_state.edit_index = idx
+                            st.session_state.edit_alimento = row_dia['Alimento']
+                            st.session_state.edit_qtd = row_dia.get('Qtd/Coef', 1.0)
+                            st.rerun()
                             
-                            # Atualizar todos os macros no DataFrame original (df_h)
-                            df_h.at[idx, "Qtd/Coef"] = novo_coef
-                            df_h.at[idx, "Proteína"] = round(float(base_ali.get('Proteína', base_ali.get('Proteina', 0))) * novo_coef, 2)
-                            df_h.at[idx, "Hidratos"] = round(float(base_ali.get('Hidratos', 0)) * novo_coef, 2)
-                            df_h.at[idx, "(açúcar)"] = round(float(base_ali.get('(açúcar)', base_ali.get('Acucar', 0))) * novo_coef, 2)
-                            df_h.at[idx, "Lípidos"] = round(float(base_ali.get('Lípidos', base_ali.get('Lipidos', 0))) * novo_coef, 2)
-                            df_h.at[idx, "Fibras"] = round(float(base_ali.get('Fibras', base_ali.get('Fibra', 0))) * novo_coef, 2)
-                            df_h.at[idx, "Calorias"] = round(float(base_ali.get('Calorias', base_ali.get('Kcal', 0))) * novo_coef, 2)
-                    
-                    if safe_update("Sheet1", df_h):
-                        st.cache_data.clear(); st.success("Valores atualizados!"); st.rerun()
-                
+                        if col_ex2.button("🗑️ Apagar", key=f"del_{idx}"):
+                            df_final = df_h.drop(idx)
+                            if safe_update("Sheet1", df_final):
+                                st.cache_data.clear(); st.success("Apagado!"); st.rerun()
+                        
+                        st.write(f"Prot: {row_dia['Proteína']:.1f}g | Hid: {row_dia['Hidratos']:.1f}g | Fib: {row_dia['Fibras']:.1f}g")
+
                 st.markdown("---")
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Kcal Total", f"{dia_df['Calorias'].sum():.0f}")
                 m2.metric("Prot Total", f"{dia_df['Proteína'].sum():.1f}g")
                 m3.metric("Fibras Total", f"{dia_df['Fibras'].sum():.1f}g")
+            else:
+                st.info("Sem registos hoje.")
