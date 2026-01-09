@@ -19,7 +19,6 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 # --- FUNÇÕES DE SUPORTE ---
 
 def safe_update(worksheet, data, max_retries=3):
-    """Tenta atualizar o Sheets com sistema de repetição."""
     for i in range(max_retries):
         try:
             conn.update(worksheet=worksheet, data=data)
@@ -33,39 +32,25 @@ def safe_update(worksheet, data, max_retries=3):
 
 @st.cache_data(ttl=60)
 def get_data_sheets(worksheet_name):
-    """Lê do Sheets e uniformiza nomes de colunas para evitar 'zeros'."""
     try:
         df = conn.read(worksheet=worksheet_name, ttl=0)
         if df is None or df.empty: return pd.DataFrame()
-        
         df = df.dropna(how='all').reset_index(drop=True)
-        
-        # MAPEAMENTO DE EMERGÊNCIA (Converte nomes antigos para os novos em tempo real)
-        mapeamento = {
-            'Proteina': 'Proteína',
-            'Acucar': '(açúcar)',
-            'Açúcar': '(açúcar)',
-            'Lipidos': 'Lípidos',
-            'Saturadas': '(satur.)',
-            'sat': '(satur.)',
-            'Fibra': 'Fibras',
-            'Kcal': 'Calorias'
-        }
-        df = df.rename(columns=mapeamento)
-        return df
+        # Mapeamento para garantir leitura de nomes antigos/novos
+        mapeamento = {'Proteina': 'Proteína', 'Acucar': '(açúcar)', 'Açúcar': '(açúcar)', 
+                      'Lipidos': 'Lípidos', 'Saturadas': '(satur.)', 'Fibra': 'Fibras', 'Kcal': 'Calorias'}
+        return df.rename(columns=mapeamento)
     except:
         return pd.DataFrame()
 
 @st.cache_data(ttl=600)
 def load_combined_food_data():
-    """Une Excel e Google Sheets."""
     try:
         df_excel = pd.read_excel("alimentos.xlsx", sheet_name="Valor nutricional")
         df_excel.columns = df_excel.columns.str.strip()
         df_excel = df_excel.dropna(subset=['ALIMENTO']).reset_index(drop=True)
     except:
         df_excel = pd.DataFrame()
-
     df_sheets = get_data_sheets("Novos_Alimentos")
     df_combined = pd.concat([df_excel, df_sheets], axis=0, ignore_index=True)
     df_combined = df_combined.loc[:, ~df_combined.columns.duplicated()]
@@ -73,12 +58,11 @@ def load_combined_food_data():
 
 df_alimentos = load_combined_food_data()
 
-# --- NAVEGAÇÃO ---
+# --- INTERFACE ---
 user = st.sidebar.selectbox("Utilizador:", ["Mia", "João Carlos", "Jorge", "Celeste"])
 data_sel = st.sidebar.date_input("Data:", date.today())
 page = st.sidebar.selectbox("Ir para:", ["Diário / Registo", "Estatísticas", "Exercício", "Câmara IA"])
 
-# --- PÁGINA 1: REGISTO ---
 if page == "Diário / Registo":
     st.header(f"📝 Diário de {user}")
     col1, col2 = st.columns([1, 1.5])
@@ -91,29 +75,29 @@ if page == "Diário / Registo":
         if st.checkbox("➕ Adicionar novo alimento à base"):
             n_nome = st.text_input("Nome (ALIMENTO):")
             c1, c2 = st.columns(2)
-            n_prot = c1.number_input("Proteína (g)", min_value=0.0)
-            n_hid = c2.number_input("Hidratos (g)", min_value=0.0)
+            n_prot = c1.number_input("Proteína (g)", 0.0)
+            n_hid = c2.number_input("Hidratos (g)", 0.0)
             c3, c4 = st.columns(2)
-            n_acu = c3.number_input("(açúcar) (g)", min_value=0.0)
-            n_lip = c4.number_input("Lípidos (g)", min_value=0.0)
+            n_acu = c3.number_input("(açúcar) (g)", 0.0)
+            n_lip = c4.number_input("Lípidos (g)", 0.0)
             c5, c6 = st.columns(2)
-            n_sat = c5.number_input("(satur.) (g)", min_value=0.0)
-            n_fib = c6.number_input("Fibras (g)", min_value=0.0)
+            n_sat = c5.number_input("(satur.) (g)", 0.0)
+            n_fib = c6.number_input("Fibras (g)", 0.0)
             c7, c8 = st.columns(2)
-            n_sal = c7.number_input("Sal (g)", min_value=0.0)
-            n_kcal = c8.number_input("Calorias", min_value=0.0)
+            n_sal = c7.number_input("Sal (g)", 0.0)
+            n_kcal = c8.number_input("Calorias", 0.0)
             
-            if st.button("💾 GUARDAR NA BASE"):
+            if st.button("💾 GUARDAR NA BASE PERMANENTE"):
                 if n_nome:
                     novo = pd.DataFrame([{"ALIMENTO": n_nome, "Proteína": n_prot, "Hidratos": n_hid, "(açúcar)": n_acu, "Lípidos": n_lip, "(satur.)": n_sat, "Fibras": n_fib, "Sal": n_sal, "Calorias": n_kcal}])
                     df_n = get_data_sheets("Novos_Alimentos")
                     safe_update("Novos_Alimentos", pd.concat([df_n, novo], ignore_index=True))
-                    st.cache_data.clear()
-                    st.success("Guardado!"); st.rerun()
+                    st.cache_data.clear(); st.success("Guardado!"); st.rerun()
 
         elif alimento_sel:
+            # --- RECUPERADA A PRÉ-VISUALIZAÇÃO EM TEMPO REAL ---
             row = df_alimentos[df_alimentos['ALIMENTO'] == alimento_sel].iloc[0]
-            qtd = st.number_input("Quantidade / Coeficiente:", min_value=0.01, value=1.00)
+            qtd = st.number_input("Quantidade / Coeficiente:", min_value=0.01, value=1.00, step=0.05)
             
             def get_v(names):
                 for n in names:
@@ -121,60 +105,52 @@ if page == "Diário / Registo":
                 return 0.0
 
             vals = {
-                "Proteína": get_v(['Proteína', 'Proteina']),
-                "Hidratos": get_v(['Hidratos']),
-                "(açúcar)": get_v(['(açúcar)', 'Acucar']),
-                "Lípidos": get_v(['Lípidos', 'Lipidos']),
-                "(satur.)": get_v(['(satur.)', 'Saturadas']),
-                "Fibras": get_v(['Fibras', 'Fibra']),
-                "Sal": get_v(['Sal']),
-                "Calorias": get_v(['Calorias', 'Kcal'])
+                "Proteína": get_v(['Proteína', 'Proteina']), "Hidratos": get_v(['Hidratos']),
+                "(açúcar)": get_v(['(açúcar)', 'Acucar']), "Lípidos": get_v(['Lípidos', 'Lipidos']),
+                "(satur.)": get_v(['(satur.)', 'Saturadas']), "Fibras": get_v(['Fibras', 'Fibra']),
+                "Sal": get_v(['Sal']), "Calorias": get_v(['Calorias', 'Kcal'])
             }
 
-            if st.button("✅ CONFIRMAR REGISTO"):
+            # Mostrador informativo antes de confirmar
+            st.markdown(f"""
+            <div style="background-color: #f0f2f6; padding: 15px; border-radius: 10px; border-left: 5px solid #ff4b4b;">
+                <strong>Resumo do que vai registar:</strong><br>
+                🔥 <b>{vals['Calorias']:.1f} Kcal</b> | 🥩 <b>{vals['Proteína']:.1f}g Prot</b><br>
+                🍞 Hidratos: {vals['Hidratos']:.1f}g (Açúcar: {vals['(açúcar)']:.1f}g)<br>
+                🥑 Lípidos: {vals['Lípidos']:.1f}g (Sat: {vals['(satur.)']:.1f}g)
+            </div>
+            """, unsafe_allow_html=True)
+
+            if st.button("✅ CONFIRMAR REGISTO NO DIÁRIO"):
                 df_h = get_data_sheets("Sheet1")
                 novo_reg = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": alimento_sel, **vals}])
                 safe_update("Sheet1", pd.concat([df_h, novo_reg], ignore_index=True))
-                st.cache_data.clear()
-                st.success("Registado!"); st.rerun()
+                st.cache_data.clear(); st.success("Registado!"); time.sleep(0.5); st.rerun()
 
     with col2:
-        st.subheader(f"Resumo: {data_sel}")
+        st.subheader(f"Resumo de {data_sel}")
         df_h = get_data_sheets("Sheet1")
         if not df_h.empty:
             df_h['Data'] = df_h['Data'].astype(str)
-            # Filtro para o dia e utilizador atual
             dia_df = df_h[(df_h['Data'] == str(data_sel)) & (df_h['Utilizador'] == user)].copy()
             
             if not dia_df.empty:
-                # 1. Adicionar coluna de seleção para apagar
                 dia_df.insert(0, "Selecionar", False)
+                cols_n = ["Alimento", "Calorias", "Proteína", "Hidratos", "(açúcar)", "Lípidos", "(satur.)", "Fibras", "Sal"]
                 
-                # 2. Configurar colunas a mostrar
-                cols_nutri = ["Alimento", "Calorias", "Proteína", "Hidratos", "(açúcar)", "Lípidos", "(satur.)", "Fibras", "Sal"]
-                
-                # 3. Editor de dados
-                edited_df = st.data_editor(
-                    dia_df[["Selecionar"] + cols_nutri],
-                    hide_index=True,
-                    use_container_width=True,
-                    column_config={"Selecionar": st.column_config.CheckboxColumn(required=True)}
-                )
+                # Garante que colunas existem para visualização
+                for c in cols_n:
+                    if c not in dia_df.columns: dia_df[c] = 0.0
 
-                # 4. BOTÃO PARA APAGAR REGISTOS
-                if st.button("🗑️ Apagar Registos Selecionados"):
-                    # Identificar índices a manter (os que NÃO estão selecionados no editor)
-                    indices_a_apagar = edited_df[edited_df["Selecionar"] == True].index
-                    # Como o edited_df é um subconjunto, usamos os índices originais do df_h
-                    indices_reais_apagar = dia_df.index[indices_a_apagar]
-                    df_final = df_h.drop(indices_reais_apagar)
-                    
+                edited_df = st.data_editor(dia_df[["Selecionar"] + cols_n], hide_index=True, use_container_width=True,
+                                          column_config={"Selecionar": st.column_config.CheckboxColumn(required=True)})
+
+                if st.button("🗑️ Apagar Selecionados"):
+                    indices_a_apagar = dia_df.index[edited_df[edited_df["Selecionar"] == True].index]
+                    df_final = df_h.drop(indices_a_apagar)
                     if safe_update("Sheet1", df_final):
-                        st.cache_data.clear()
-                        st.success("Registos eliminados!")
-                        time.sleep(1); st.rerun()
+                        st.cache_data.clear(); st.success("Eliminado!"); time.sleep(0.5); st.rerun()
                 
-                # 5. MÉTRICAS TOTAIS
                 st.markdown("---")
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("🔥 Kcal", f"{dia_df['Calorias'].sum():.0f}")
