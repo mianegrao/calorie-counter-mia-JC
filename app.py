@@ -36,7 +36,7 @@ def get_data_sheets(worksheet_name):
         df = conn.read(worksheet=worksheet_name, ttl=0)
         if df is None or df.empty: return pd.DataFrame()
         df = df.dropna(how='all').reset_index(drop=True)
-        # Mapeamento para garantir leitura de nomes antigos/novos
+        # Garante leitura de nomes antigos/novos sem falhas
         mapeamento = {'Proteina': 'Proteína', 'Acucar': '(açúcar)', 'Açúcar': '(açúcar)', 
                       'Lipidos': 'Lípidos', 'Saturadas': '(satur.)', 'Fibra': 'Fibras', 'Kcal': 'Calorias'}
         return df.rename(columns=mapeamento)
@@ -65,7 +65,7 @@ page = st.sidebar.selectbox("Ir para:", ["Diário / Registo", "Estatísticas", "
 
 if page == "Diário / Registo":
     st.header(f"📝 Diário de {user}")
-    col1, col2 = st.columns([1, 1.5])
+    col1, col2 = st.columns([1, 1.3])
     
     with col1:
         st.subheader("Novo Registo")
@@ -95,7 +95,7 @@ if page == "Diário / Registo":
                     st.cache_data.clear(); st.success("Guardado!"); st.rerun()
 
         elif alimento_sel:
-            # --- RECUPERADA A PRÉ-VISUALIZAÇÃO EM TEMPO REAL ---
+            # PRÉ-VISUALIZAÇÃO SIMPLES (Texto direto)
             row = df_alimentos[df_alimentos['ALIMENTO'] == alimento_sel].iloc[0]
             qtd = st.number_input("Quantidade / Coeficiente:", min_value=0.01, value=1.00, step=0.05)
             
@@ -111,15 +111,8 @@ if page == "Diário / Registo":
                 "Sal": get_v(['Sal']), "Calorias": get_v(['Calorias', 'Kcal'])
             }
 
-            # Mostrador informativo antes de confirmar
-            st.markdown(f"""
-            <div style="background-color: #f0f2f6; padding: 15px; border-radius: 10px; border-left: 5px solid #ff4b4b;">
-                <strong>Resumo do que vai registar:</strong><br>
-                🔥 <b>{vals['Calorias']:.1f} Kcal</b> | 🥩 <b>{vals['Proteína']:.1f}g Prot</b><br>
-                🍞 Hidratos: {vals['Hidratos']:.1f}g (Açúcar: {vals['(açúcar)']:.1f}g)<br>
-                🥑 Lípidos: {vals['Lípidos']:.1f}g (Sat: {vals['(satur.)']:.1f}g)
-            </div>
-            """, unsafe_allow_html=True)
+            # Exibição clara e simples antes de confirmar
+            st.info(f"A registar: {vals['Calorias']:.1f} Kcal | {vals['Proteína']:.1f}g Prot | {vals['Hidratos']:.1f}g Hidratos")
 
             if st.button("✅ CONFIRMAR REGISTO NO DIÁRIO"):
                 df_h = get_data_sheets("Sheet1")
@@ -128,34 +121,31 @@ if page == "Diário / Registo":
                 st.cache_data.clear(); st.success("Registado!"); time.sleep(0.5); st.rerun()
 
     with col2:
-        st.subheader(f"Resumo de {data_sel}")
+        st.subheader(f"Resumo: {data_sel}")
         df_h = get_data_sheets("Sheet1")
         if not df_h.empty:
             df_h['Data'] = df_h['Data'].astype(str)
             dia_df = df_h[(df_h['Data'] == str(data_sel)) & (df_h['Utilizador'] == user)].copy()
             
             if not dia_df.empty:
-                dia_df.insert(0, "Selecionar", False)
+                # Botão de apagar simplificado
+                dia_df.insert(0, "Sel.", False)
                 cols_n = ["Alimento", "Calorias", "Proteína", "Hidratos", "(açúcar)", "Lípidos", "(satur.)", "Fibras", "Sal"]
                 
-                # Garante que colunas existem para visualização
-                for c in cols_n:
-                    if c not in dia_df.columns: dia_df[c] = 0.0
-
-                edited_df = st.data_editor(dia_df[["Selecionar"] + cols_n], hide_index=True, use_container_width=True,
-                                          column_config={"Selecionar": st.column_config.CheckboxColumn(required=True)})
+                # Editor limpo
+                edited_df = st.data_editor(dia_df[["Sel."] + cols_n], hide_index=True, use_container_width=True)
 
                 if st.button("🗑️ Apagar Selecionados"):
-                    indices_a_apagar = dia_df.index[edited_df[edited_df["Selecionar"] == True].index]
+                    indices_a_apagar = dia_df.index[edited_df[edited_df["Sel."] == True].index]
                     df_final = df_h.drop(indices_a_apagar)
                     if safe_update("Sheet1", df_final):
-                        st.cache_data.clear(); st.success("Eliminado!"); time.sleep(0.5); st.rerun()
+                        st.cache_data.clear(); st.success("Eliminado!"); st.rerun()
                 
                 st.markdown("---")
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("🔥 Kcal", f"{dia_df['Calorias'].sum():.0f}")
-                m2.metric("🥩 Prot", f"{dia_df['Proteína'].sum():.1f}g")
-                m3.metric("🍭 Açúcar", f"{dia_df['(açúcar)'].sum():.1f}g")
-                m4.metric("🌾 Fibras", f"{dia_df['Fibras'].sum():.1f}g")
+                m1.metric("Kcal", f"{dia_df['Calorias'].sum():.0f}")
+                m2.metric("Prot", f"{dia_df['Proteína'].sum():.1f}g")
+                m3.metric("Açúcar", f"{dia_df['(açúcar)'].sum():.1f}g")
+                m4.metric("Fibras", f"{dia_df['Fibras'].sum():.1f}g")
             else:
                 st.info("Sem registos hoje.")
