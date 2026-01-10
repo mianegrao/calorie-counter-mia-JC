@@ -26,19 +26,19 @@ def safe_update(worksheet, data):
     try:
         df_to_save = data.copy()
         if "Sel." in df_to_save.columns: df_to_save = df_to_save.drop(columns=["Sel."])
-        # Converte datas para string para evitar erros no Sheets
-        if 'Data' in df_to_save.columns:
-            df_to_save['Data'] = df_to_save['Data'].astype(str)
+        df_to_save['Data'] = df_to_save['Data'].astype(str)
         conn.update(worksheet=worksheet, data=df_to_save)
         return True
     except: return False
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=10) # TTL baixo para atualizar rápido
 def get_data_sheets(worksheet_name):
     try:
         df = conn.read(worksheet=worksheet_name, ttl=0)
         if df is None or df.empty: return pd.DataFrame()
         df = df.dropna(how='all').reset_index(drop=True)
+        # Limpeza de nomes de colunas e dados
+        df.columns = df.columns.str.strip()
         mapeamento = {'Proteina': 'Proteína', 'Acucar': '(açúcar)', 'Açúcar': '(açúcar)', 
                       'Lipidos': 'Lípidos', 'Saturadas': '(satur.)', 'Fibra': 'Fibras', 'Kcal': 'Calorias'}
         return df.rename(columns=mapeamento)
@@ -125,8 +125,7 @@ if page == "Diário / Registo":
                     sel_idx = edited_df[edited_df["Sel."] == True].index
                     if len(sel_idx) == 1:
                         idx = sel_idx[0]
-                        st.session_state.edit_mode = True
-                        st.session_state.edit_index = idx
+                        st.session_state.edit_mode, st.session_state.edit_index = True, idx
                         st.session_state.edit_alimento = dia_df.at[idx, 'Alimento']
                         st.session_state.edit_qtd = dia_df.at[idx, 'Qtd/Coef'] if 'Qtd/Coef' in dia_df.columns else 1.0
                         st.rerun()
@@ -148,38 +147,49 @@ elif page == "Estatísticas":
     df_h = get_data_sheets("Sheet1")
     
     if not df_h.empty:
-        # CONVERSÃO SEGURA DE DATA
+        # Limpeza rigorosa para garantir correspondência
+        df_h['Utilizador'] = df_h['Utilizador'].str.strip()
         df_h['Data'] = pd.to_datetime(df_h['Data'], errors='coerce')
+        
+        # Filtro pelo utilizador selecionado
         user_df = df_h[(df_h['Utilizador'] == user) & (df_h['Data'].notnull())].copy()
         
         if not user_df.empty:
-            diario = user_df.groupby('Data').agg({
+            # Agrupar por data para ter o total consumido em cada dia real de registo
+            diario = user_df.groupby(user_df['Data'].dt.date).agg({
                 'Calorias': 'sum', 'Proteína': 'sum', '(açúcar)': 'sum', 'Fibras': 'sum'
             }).reset_index()
+            diario.columns = ['Data', 'Calorias', 'Proteína', 'Açúcar', 'Fibras']
+            diario['Data'] = pd.to_datetime(diario['Data'])
 
-            tab1, tab2 = st.tabs(["📅 Semanal", "📆 Mensal"])
+            tab1, tab2 = st.tabs(["📅 Médias Semanais", "📆 Médias Mensais"])
 
             with tab1:
-                st.subheader("Médias (Últimos 7 dias com registos)")
-                # Pega nos últimos 7 dias que têm dados
-                last_days = diario.sort_values('Data', ascending=False).head(7)
+                st.subheader("Média por dia de registo (Últimos 7 dias com dados)")
+                # Ordenar por data e pegar nos últimos 7 dias que têm registos
+                ultimos_7_dias = diario.sort_values('Data', ascending=False).head(7)
                 
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Kcal", f"{last_days['Calorias'].mean():.0f}")
-                c2.metric("Prot", f"{last_days['Proteína'].mean():.1f}g")
-                c3.metric("Açúcar", f"{last_days['(açúcar)'].mean():.1f}g")
-                c4.metric("Fibras", f"{last_days['Fibras'].mean():.1f}g")
+                c1.metric("🔥 Kcal", f"{ultimos_7_dias['Calorias'].mean():.0f}")
+                c2.metric("🥩 Prot", f"{ultimos_7_dias['Proteína'].mean():.1f}g")
+                c3.metric("🍭 Açúcar", f"{ultimos_7_dias['Açúcar'].mean():.1f}g")
+                c4.metric("🌾 Fibras", f"{ultimos_7_dias['Fibras'].mean():.1f}g")
                 
+                st.markdown("**Evolução Calórica (Dias Ativos):**")
                 st.line_chart(diario.set_index('Data')[['Calorias']])
 
             with tab2:
-                st.subheader("Médias Mensais")
-                diario['Mês'] = diario['Data'].dt.to_period('M').astype(str)
+                st.subheader("Resumo por Mês")
+                diario['Mês'] = diario['Data'].dt.strftime('%Y-%m')
+                # Média diária apenas dos dias em que houve consumo naquele mês
                 mensal = diario.groupby('Mês').agg({
-                    'Calorias': 'mean', 'Proteína': 'mean', '(açúcar)': 'mean', 'Fibras': 'mean'
+                    'Calorias': 'mean', 'Proteína': 'mean', 'Açúcar': 'mean', 'Fibras': 'mean'
                 }).reset_index()
                 
-                st.dataframe(mensal, use_container_width=True, hide_index=True)
+                st.dataframe(mensal.rename(columns={'Calorias': 'Média Kcal', 'Proteína': 'Média Prot'}), 
+                             use_container_width=True, hide_index=True)
                 st.bar_chart(mensal.set_index('Mês')[['Calorias']])
-        else: st.info("Sem dados registados para este utilizador.")
-    else: st.error("A base de dados está vazia ou inacessível.")
+        else:
+            st.info(f"Não foram encontrados registos para **{user}**. Verifique se o nome na base de dados está exatamente igual.")
+    else:
+        st.error("A base de dados não pôde ser carregada.")
