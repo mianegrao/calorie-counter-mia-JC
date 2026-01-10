@@ -8,12 +8,18 @@ import time
 # --- 1. CONFIGURAÇÃO E ESTILOS (CSS) ---
 st.set_page_config(page_title="Nutri Control Pro", layout="wide", page_icon="🍎")
 
-# CSS Ajustado: Métricas menores e texto legível
+# Estilos para o texto dos totais (pequeno e sem caixas)
 st.markdown("""
     <style>
-    [data-testid="stMetricValue"] { color: #1f1f1f !important; font-size: 1.2rem !important; font-weight: bold; }
-    [data-testid="stMetricLabel"] { color: #5f6368 !important; font-size: 0.8rem !important; }
-    .stMetric { background-color: #ffffff !important; border: 1px solid #e0e0e0; padding: 5px 10px !important; border-radius: 8px; }
+    .totais-texto {
+        font-size: 0.85rem;
+        color: #333;
+        background-color: #f8f9fa;
+        padding: 10px;
+        border-radius: 5px;
+        line-height: 1.6;
+    }
+    .totais-valor { font-weight: bold; color: #000; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -138,7 +144,6 @@ if page == "Diário / Registo":
                     indices = edited_df[edited_df["Sel."]].index
                     if safe_update("Sheet1", df_h.drop(indices)): st.cache_data.clear(); st.rerun()
                 
-                # MUDANÇA DE DATA EM MASSA
                 with c3:
                     with st.popover("📅 Alterar Data"):
                         nova_d = st.date_input("Nova data:", date.today())
@@ -148,17 +153,23 @@ if page == "Diário / Registo":
                             if safe_update("Sheet1", df_h): st.cache_data.clear(); st.rerun()
 
                 st.divider()
-                m = st.columns(8)
-                m[0].metric("Kcal", f"{dia_df['Calorias'].sum():.0f}")
-                m[1].metric("Prot", f"{dia_df['Proteína'].sum():.1f}")
-                m[2].metric("Hidr", f"{dia_df['Hidratos'].sum():.1f}")
-                m[3].metric("Açúc", f"{dia_df['(açúcar)'].sum():.1f}")
-                m[4].metric("Líp", f"{dia_df['Lípidos'].sum():.1f}")
-                m[5].metric("Sat", f"{dia_df['(satur.)'].sum():.1f}")
-                m[6].metric("Fib", f"{dia_df['Fibras'].sum():.1f}")
-                m[7].metric("Sal", f"{dia_df['Sal'].sum():.2f}")
+                
+                # Totais em formato de texto simples e compacto
+                st.markdown(f"""
+                <div class="totais-texto">
+                    <b>TOTAIS DO DIA:</b><br>
+                    🔥 <span class="totais-valor">{dia_df['Calorias'].sum():.0f}</span> Kcal | 
+                    🥩 Prot: <span class="totais-valor">{dia_df['Proteína'].sum():.1f}g</span> | 
+                    🍞 Hidr: <span class="totais-valor">{dia_df['Hidratos'].sum():.1f}g</span> | 
+                    🍭 Açúcar: <span class="totais-valor">{dia_df['(açúcar)'].sum():.1f}g</span> | 
+                    🥑 Líp: <span class="totais-valor">{dia_df['Lípidos'].sum():.1f}g</span> | 
+                    🍔 Sat: <span class="totais-valor">{dia_df['(satur.)'].sum():.1f}g</span> | 
+                    🌾 Fibra: <span class="totais-valor">{dia_df['Fibras'].sum():.1f}g</span> | 
+                    🧂 Sal: <span class="totais-valor">{dia_df['Sal'].sum():.2f}g</span>
+                </div>
+                """, unsafe_allow_html=True)
 
-# --- 6. PÁGINA: ESTATÍSTICAS (CORRIGIDA) ---
+# --- 6. PÁGINA: ESTATÍSTICAS ---
 elif page == "Estatísticas":
     st.header(f"📊 Estatísticas de {user}")
     df_h = get_data_sheets("Sheet1")
@@ -169,7 +180,6 @@ elif page == "Estatísticas":
             cols = ['Calorias', 'Proteína', 'Hidratos', '(açúcar)', 'Lípidos', '(satur.)', 'Fibras', 'Sal']
             for c in cols: user_df[c] = pd.to_numeric(user_df[c], errors='coerce').fillna(0)
             
-            # Agrupar por dia (apenas dias com entradas)
             diario = user_df.groupby(user_df['Data'].dt.date)[cols].sum().reset_index()
             diario['Data'] = pd.to_datetime(diario['Data'])
             
@@ -177,15 +187,21 @@ elif page == "Estatísticas":
             with t1:
                 u = diario.tail(7)
                 st.subheader(f"Média Diária (Últimos {len(u)} dias com registo)")
-                r1, r2 = st.columns(4), st.columns(4)
-                r1[0].metric("🔥 Kcal", f"{u['Calorias'].mean():.0f}")
-                r1[1].metric("🥩 Prot", f"{u['Proteína'].mean():.1f}g")
-                r1[2].metric("🍞 Hidr", f"{u['Hidratos'].mean():.1f}g")
-                r1[3].metric("🥑 Líp", f"{u['Lípidos'].mean():.1f}g")
-                r2[0].metric("🍭 Açúcar", f"{u['(açúcar)'].mean():.1f}g")
-                r2[1].metric("🍔 Sat.", f"{u['(satur.)'].mean():.1f}g")
-                r2[2].metric("🌾 Fibra", f"{u['Fibras'].mean():.1f}g")
-                r2[3].metric("🧂 Sal", f"{u['Sal'].mean():.2f}g")
+                
+                # Estatísticas também em formato de texto compacto para consistência
+                st.markdown(f"""
+                <div class="totais-texto">
+                    🔥 Kcal: <span class="totais-valor">{u['Calorias'].mean():.0f}</span> | 
+                    🥩 Prot: <span class="totais-valor">{u['Proteína'].mean():.1f}g</span> | 
+                    🍞 Hidr: <span class="totais-valor">{u['Hidratos'].mean():.1f}g</span> | 
+                    🥑 Líp: <span class="totais-valor">{u['Lípidos'].mean():.1f}g</span> | 
+                    🍭 Açúcar: <span class="totais-valor">{u['(açúcar)'].mean():.1f}g</span> | 
+                    🍔 Sat: <span class="totais-valor">{u['(satur.)'].mean():.1f}g</span> | 
+                    🌾 Fibra: <span class="totais-valor">{u['Fibras'].mean():.1f}g</span> | 
+                    🧂 Sal: <span class="totais-valor">{u['Sal'].mean():.2f}g</span>
+                </div>
+                """, unsafe_allow_html=True)
+                
                 st.line_chart(diario.set_index('Data')['Calorias'])
             with t2:
                 diario['Mês'] = diario['Data'].dt.strftime('%Y-%m')
