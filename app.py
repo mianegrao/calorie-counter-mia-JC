@@ -26,9 +26,11 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+# CONFIGURAÇÃO DA API GEMINI - Modelo Atualizado para Versão Estável
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    # Alterado de 'gemini-1.5-flash-latest' para 'gemini-1.5-flash' para evitar Erro 404
+    model = genai.GenerativeModel('gemini-1.5-flash')
 else:
     st.error("API Key do Gemini não encontrada nos secrets.")
 
@@ -116,7 +118,6 @@ if page == "Diário / Registo":
                         try:
                             p = f"Gera valores para 100g de '{novo_nome}': Calorias, Proteína, Hidratos, Açúcar, Lípidos, Saturadas, Fibras, Sal. Responde apenas com números separados por vírgulas."
                             response = model.generate_content(p)
-                            # CORREÇÃO DO ERRO: Verificar se a resposta tem texto válido
                             if response and response.text:
                                 st.session_state.ia_vals = [float(x.strip()) for x in response.text.split(',')]
                                 st.success("Valores sugeridos pela IA aplicados!")
