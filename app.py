@@ -20,13 +20,16 @@ st.markdown("""
     }
     .totais-valor { font-weight: bold; color: #000; }
     .info-alimento {
-        background-color: #e8f0fe;
-        padding: 8px;
-        border-radius: 5px;
-        border-left: 5px solid #1a73e8;
+        background-color: #1e1e1e;
+        color: #ffffff;
+        padding: 12px;
+        border-radius: 8px;
+        border: 1px solid #333;
         margin-bottom: 15px;
-        font-size: 0.85rem;
+        font-size: 0.9rem;
+        line-height: 1.5;
     }
+    .info-alimento b { color: #4CAF50; } /* Destaque para o título em verde */
     </style>
     """, unsafe_allow_html=True)
 
@@ -119,26 +122,21 @@ if page == "Diário / Registo":
             row = df_alimentos[df_alimentos['ALIMENTO'] == alimento_sel].iloc[0]
             qtd = st.number_input("Coeficiente (1.0=100g):", min_value=0.01, value=float(st.session_state.edit_qtd))
             
-            # --- TABELA NUTRICIONAL PRÉVIA (A sua alteração solicitada) ---
             nutri = {
-                "Calorias": row.get('Calorias', 0) * qtd,
-                "Proteína": row.get('Proteína', 0) * qtd,
-                "Hidratos": row.get('Hidratos', 0) * qtd,
-                "(açúcar)": row.get('(açúcar)', 0) * qtd,
-                "Lípidos": row.get('Lípidos', 0) * qtd,
-                "(satur.)": row.get('(satur.)', 0) * qtd,
-                "Fibras": row.get('Fibras', 0) * qtd,
-                "Sal": row.get('Sal', 0) * qtd
+                "Calorias": row.get('Calorias', 0) * qtd, "Proteína": row.get('Proteína', 0) * qtd,
+                "Hidratos": row.get('Hidratos', 0) * qtd, "(açúcar)": row.get('(açúcar)', 0) * qtd,
+                "Lípidos": row.get('Lípidos', 0) * qtd, "(satur.)": row.get('(satur.)', 0) * qtd,
+                "Fibras": row.get('Fibras', 0) * qtd, "Sal": row.get('Sal', 0) * qtd
             }
             
+            # Caixa informativa com fundo escuro e letras brancas
             st.markdown(f"""
             <div class="info-alimento">
-                <b>Valores para este registo:</b><br>
+                <b>RESUMO NUTRICIONAL:</b><br>
                 🔥 {nutri['Calorias']:.0f} Kcal | 🥩 {nutri['Proteína']:.1f}g P | 🍞 {nutri['Hidratos']:.1f}g H | 🍭 {nutri['(açúcar)']:.1f}g A<br>
                 🥑 {nutri['Lípidos']:.1f}g L | 🍔 {nutri['(satur.)']:.1f}g S | 🌾 {nutri['Fibras']:.1f}g F | 🧂 {nutri['Sal']:.2f}g Sal
             </div>
             """, unsafe_allow_html=True)
-            # -------------------------------------------------------------
 
             if st.button("💾 CONFIRMAR", type="primary", use_container_width=True):
                 df_h = get_data_sheets("Sheet1")
