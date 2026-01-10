@@ -19,6 +19,14 @@ st.markdown("""
         line-height: 1.6;
     }
     .totais-valor { font-weight: bold; color: #000; }
+    .info-alimento {
+        background-color: #e8f0fe;
+        padding: 8px;
+        border-radius: 5px;
+        border-left: 5px solid #1a73e8;
+        margin-bottom: 15px;
+        font-size: 0.85rem;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -110,7 +118,28 @@ if page == "Diário / Registo":
         if alimento_sel:
             row = df_alimentos[df_alimentos['ALIMENTO'] == alimento_sel].iloc[0]
             qtd = st.number_input("Coeficiente (1.0=100g):", min_value=0.01, value=float(st.session_state.edit_qtd))
-            nutri = {"Calorias": row.get('Calorias',0)*qtd, "Proteína": row.get('Proteína',0)*qtd, "Hidratos": row.get('Hidratos',0)*qtd, "(açúcar)": row.get('(açúcar)',0)*qtd, "Lípidos": row.get('Lípidos',0)*qtd, "(satur.)": row.get('(satur.)',0)*qtd, "Fibras": row.get('Fibras',0)*qtd, "Sal": row.get('Sal',0)*qtd}
+            
+            # --- TABELA NUTRICIONAL PRÉVIA (A sua alteração solicitada) ---
+            nutri = {
+                "Calorias": row.get('Calorias', 0) * qtd,
+                "Proteína": row.get('Proteína', 0) * qtd,
+                "Hidratos": row.get('Hidratos', 0) * qtd,
+                "(açúcar)": row.get('(açúcar)', 0) * qtd,
+                "Lípidos": row.get('Lípidos', 0) * qtd,
+                "(satur.)": row.get('(satur.)', 0) * qtd,
+                "Fibras": row.get('Fibras', 0) * qtd,
+                "Sal": row.get('Sal', 0) * qtd
+            }
+            
+            st.markdown(f"""
+            <div class="info-alimento">
+                <b>Valores para este registo:</b><br>
+                🔥 {nutri['Calorias']:.0f} Kcal | 🥩 {nutri['Proteína']:.1f}g P | 🍞 {nutri['Hidratos']:.1f}g H | 🍭 {nutri['(açúcar)']:.1f}g A<br>
+                🥑 {nutri['Lípidos']:.1f}g L | 🍔 {nutri['(satur.)']:.1f}g S | 🌾 {nutri['Fibras']:.1f}g F | 🧂 {nutri['Sal']:.2f}g Sal
+            </div>
+            """, unsafe_allow_html=True)
+            # -------------------------------------------------------------
+
             if st.button("💾 CONFIRMAR", type="primary", use_container_width=True):
                 df_h = get_data_sheets("Sheet1")
                 if st.session_state.edit_mode:
@@ -166,25 +195,21 @@ if page == "Diário / Registo":
                 </div>
                 """, unsafe_allow_html=True)
 
-# --- 6. PÁGINA: ESTATÍSTICAS (CORREÇÃO DE FILTRAGEM) ---
+# --- 6. PÁGINA: ESTATÍSTICAS ---
 elif page == "Estatísticas":
     st.header(f"📊 Estatísticas de {user}")
     df_h = get_data_sheets("Sheet1")
     if not df_h.empty:
-        # 1. Normalização de dados e filtragem robusta
         df_h['Utilizador'] = df_h['Utilizador'].astype(str).str.strip().str.lower()
         user_lower = user.strip().lower()
-        
         user_df = df_h[df_h['Utilizador'] == user_lower].copy()
         
         if not user_df.empty:
             user_df['Data'] = pd.to_datetime(user_df['Data'], errors='coerce')
             user_df = user_df.dropna(subset=['Data'])
-            
             cols = ['Calorias', 'Proteína', 'Hidratos', '(açúcar)', 'Lípidos', '(satur.)', 'Fibras', 'Sal']
             for c in cols: user_df[c] = pd.to_numeric(user_df[c], errors='coerce').fillna(0)
             
-            # Agrupar totais por dia
             diario = user_df.groupby(user_df['Data'].dt.date)[cols].sum().reset_index()
             diario['Data'] = pd.to_datetime(diario['Data'])
             diario = diario.sort_values('Data')
@@ -213,7 +238,7 @@ elif page == "Estatísticas":
                 diario['Mês'] = diario['Data'].dt.strftime('%Y-%m')
                 st.dataframe(diario.groupby('Mês')[cols].mean(), use_container_width=True)
         else:
-            st.warning(f"Não foram encontrados registos para o utilizador '{user}'. Verifique se o nome na folha de cálculo corresponde exatamente.")
+            st.warning(f"Não foram encontrados registos para o utilizador '{user}'.")
     else:
         st.error("Não foi possível carregar os dados da folha de cálculo.")
 
