@@ -8,7 +8,6 @@ import time
 # --- 1. CONFIGURAÇÃO E ESTILOS (CSS) ---
 st.set_page_config(page_title="Nutri Control Pro", layout="wide", page_icon="🍎")
 
-# Estilos para o texto dos totais (pequeno e sem caixas)
 st.markdown("""
     <style>
     .totais-texto {
@@ -153,8 +152,6 @@ if page == "Diário / Registo":
                             if safe_update("Sheet1", df_h): st.cache_data.clear(); st.rerun()
 
                 st.divider()
-                
-                # Totais em formato de texto simples e compacto
                 st.markdown(f"""
                 <div class="totais-texto">
                     <b>TOTAIS DO DIA:</b><br>
@@ -169,26 +166,35 @@ if page == "Diário / Registo":
                 </div>
                 """, unsafe_allow_html=True)
 
-# --- 6. PÁGINA: ESTATÍSTICAS ---
+# --- 6. PÁGINA: ESTATÍSTICAS (CORREÇÃO DE FILTRAGEM) ---
 elif page == "Estatísticas":
     st.header(f"📊 Estatísticas de {user}")
     df_h = get_data_sheets("Sheet1")
     if not df_h.empty:
-        df_h['Data'] = pd.to_datetime(df_h['Data'], errors='coerce')
-        user_df = df_h[df_h['Utilizador'].str.lower() == user.lower()].copy()
+        # 1. Normalização de dados e filtragem robusta
+        df_h['Utilizador'] = df_h['Utilizador'].astype(str).str.strip().str.lower()
+        user_lower = user.strip().lower()
+        
+        user_df = df_h[df_h['Utilizador'] == user_lower].copy()
+        
         if not user_df.empty:
+            user_df['Data'] = pd.to_datetime(user_df['Data'], errors='coerce')
+            user_df = user_df.dropna(subset=['Data'])
+            
             cols = ['Calorias', 'Proteína', 'Hidratos', '(açúcar)', 'Lípidos', '(satur.)', 'Fibras', 'Sal']
             for c in cols: user_df[c] = pd.to_numeric(user_df[c], errors='coerce').fillna(0)
             
+            # Agrupar totais por dia
             diario = user_df.groupby(user_df['Data'].dt.date)[cols].sum().reset_index()
             diario['Data'] = pd.to_datetime(diario['Data'])
+            diario = diario.sort_values('Data')
             
             t1, t2 = st.tabs(["📅 Médias de Dias Ativos", "📆 Histórico Mensal"])
             with t1:
                 u = diario.tail(7)
-                st.subheader(f"Média Diária (Últimos {len(u)} dias com registo)")
+                num_dias = len(u)
+                st.subheader(f"Média Diária (Últimos {num_dias} dias com registo)")
                 
-                # Estatísticas também em formato de texto compacto para consistência
                 st.markdown(f"""
                 <div class="totais-texto">
                     🔥 Kcal: <span class="totais-valor">{u['Calorias'].mean():.0f}</span> | 
@@ -206,7 +212,10 @@ elif page == "Estatísticas":
             with t2:
                 diario['Mês'] = diario['Data'].dt.strftime('%Y-%m')
                 st.dataframe(diario.groupby('Mês')[cols].mean(), use_container_width=True)
-        else: st.warning("Sem dados para este utilizador.")
+        else:
+            st.warning(f"Não foram encontrados registos para o utilizador '{user}'. Verifique se o nome na folha de cálculo corresponde exatamente.")
+    else:
+        st.error("Não foi possível carregar os dados da folha de cálculo.")
 
 elif page == "Câmara IA":
     st.header("📸 Câmara IA")
