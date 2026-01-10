@@ -8,7 +8,6 @@ import time
 # --- 1. CONFIGURAÇÃO E ESTILOS (CSS) ---
 st.set_page_config(page_title="Nutri Control Pro", layout="wide", page_icon="🍎")
 
-# CSS para garantir legibilidade das métricas (Texto preto sobre fundo branco)
 st.markdown("""
     <style>
     [data-testid="stMetricValue"] {
@@ -27,7 +26,6 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# Configuração da API Gemini
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
@@ -46,20 +44,14 @@ if "edit_mode" not in st.session_state:
 # --- 3. FUNÇÕES DE SUPORTE ---
 
 def safe_update(worksheet_name, data):
-    """Grava dados no Google Sheets garantindo limpeza de formatos."""
     try:
         df_to_save = data.copy()
         if "Sel." in df_to_save.columns: 
             df_to_save = df_to_save.drop(columns=["Sel."])
-        
-        # Garante que a coluna Data é string para o Sheets
         if 'Data' in df_to_save.columns:
             df_to_save['Data'] = df_to_save['Data'].astype(str)
-            
-        # Limpa espaços em branco nos textos
         for col in df_to_save.select_dtypes(include=['object']).columns:
             df_to_save[col] = df_to_save[col].astype(str).str.strip()
-            
         conn.update(worksheet=worksheet_name, data=df_to_save)
         return True
     except Exception as e:
@@ -68,18 +60,14 @@ def safe_update(worksheet_name, data):
 
 @st.cache_data(ttl=5)
 def get_data_sheets(worksheet_name):
-    """Lê dados e normaliza nomes de colunas."""
     try:
         df = conn.read(worksheet=worksheet_name, ttl=0)
         if df is None or df.empty: return pd.DataFrame()
         df = df.dropna(how='all').reset_index(drop=True)
         df.columns = df.columns.str.strip()
-        
-        # Limpeza de espaços nos dados
         for col in ['Utilizador', 'Alimento', 'ALIMENTO']:
             if col in df.columns:
                 df[col] = df[col].astype(str).str.strip()
-        
         mapeamento = {
             'Proteina': 'Proteína', 'Acucar': '(açúcar)', 'Açúcar': '(açúcar)', 
             'Lipidos': 'Lípidos', 'Saturadas': '(satur.)', 'Fibra': 'Fibras', 
@@ -91,7 +79,6 @@ def get_data_sheets(worksheet_name):
 
 @st.cache_data(ttl=600)
 def load_combined_food_data():
-    """Une Excel e Novos Alimentos do Sheets."""
     try:
         df_excel = pd.read_excel("alimentos.xlsx", sheet_name="Valor nutricional")
         df_excel.columns = df_excel.columns.str.strip()
@@ -102,12 +89,11 @@ def load_combined_food_data():
 
 df_alimentos = load_combined_food_data()
 
-# --- 4. INTERFACE LATERAL ---
+# --- 4. INTERFACE ---
 user = st.sidebar.selectbox("Utilizador:", ["Mia", "João Carlos", "Jorge", "Celeste"])
 data_sel = st.sidebar.date_input("Data:", date.today())
 page = st.sidebar.selectbox("Ir para:", ["Diário / Registo", "Estatísticas", "Câmara IA"])
 
-# --- 5. PÁGINA: DIÁRIO / REGISTO ---
 if page == "Diário / Registo":
     st.header(f"📝 Diário de {user}")
     col_form, col_resumo = st.columns([1.5, 2.0], gap="large")
@@ -121,20 +107,25 @@ if page == "Diário / Registo":
             opcoes = df_alimentos['ALIMENTO'].unique().tolist() if not df_alimentos.empty else []
             alimento_sel = st.selectbox("Pesquisar Alimento:", options=opcoes, index=None, placeholder="Escreva o nome...")
 
-        # --- ADICIONAR NOVO ALIMENTO À FOLHA "Novos_Alimentos" ---
         if not st.session_state.edit_mode and alimento_sel is None:
             with st.expander("✨ Alimento não listado? Adicionar à base de dados"):
                 novo_nome = st.text_input("Nome do Alimento:")
                 
                 if st.button("Sugerir valores com IA"):
                     if novo_nome:
-                        p = f"Gera valores para 100g de '{novo_nome}': Calorias, Proteína, Hidratos, Açúcar, Lípidos, Saturadas, Fibras, Sal. Responde apenas com números separados por vírgulas."
-                        res = model.generate_content(p).text
-                        st.session_state.ia_vals = [float(x.strip()) for x in res.split(',')]
+                        try:
+                            p = f"Gera valores para 100g de '{novo_nome}': Calorias, Proteína, Hidratos, Açúcar, Lípidos, Saturadas, Fibras, Sal. Responde apenas com números separados por vírgulas."
+                            response = model.generate_content(p)
+                            # CORREÇÃO DO ERRO: Verificar se a resposta tem texto válido
+                            if response and response.text:
+                                st.session_state.ia_vals = [float(x.strip()) for x in response.text.split(',')]
+                                st.success("Valores sugeridos pela IA aplicados!")
+                            else:
+                                st.error("A IA não conseguiu gerar uma resposta válida.")
+                        except Exception as e:
+                            st.error(f"Erro na IA: {e}")
                 
                 v = st.session_state.get('ia_vals', [0.0]*8)
-                
-                # Campos na ordem do Excel
                 n_kcal = st.number_input("Calorias (100g):", value=v[0])
                 n_prot = st.number_input("Proteína (100g):", value=v[1])
                 n_hidr = st.number_input("Hidratos (100g):", value=v[2])
@@ -152,12 +143,9 @@ if page == "Diário / Registo":
                             "(açúcar)": n_acuc, "Lípidos": n_lipd, "(satur.)": n_satu, "Fibras": n_fibr, "Sal": n_sal
                         }])
                         if safe_update("Novos_Alimentos", pd.concat([df_novos, novo_row], ignore_index=True)):
-                            st.success(f"'{novo_nome}' gravado! Atualiza a página.")
-                            st.cache_data.clear()
-                            time.sleep(1)
-                            st.rerun()
+                            st.success(f"'{novo_nome}' gravado!"); st.cache_data.clear()
+                            time.sleep(1); st.rerun()
 
-        # --- REGISTO NO DIÁRIO (SHEET1) ---
         if alimento_sel:
             row = df_alimentos[df_alimentos['ALIMENTO'] == alimento_sel].iloc[0]
             qtd = st.number_input("Coeficiente (1.0 = 100g):", min_value=0.01, value=float(st.session_state.edit_qtd), step=0.05)
@@ -173,7 +161,6 @@ if page == "Diário / Registo":
                 "Lípidos": get_v(['Lípidos', 'Lipidos'], qtd), "(satur.)": get_v(['(satur.)', 'Saturadas'], qtd),
                 "Fibras": get_v(['Fibras', 'Fibra'], qtd), "Sal": get_v(['Sal'], qtd)
             }
-
             st.info(f"👉 {nutri['Calorias']:.0f} Kcal | {nutri['Proteína']:.1f}g Prot")
 
             if st.button("💾 " + ("ATUALIZAR" if st.session_state.edit_mode else "CONFIRMAR REGISTO"), type="primary", use_container_width=True):
@@ -185,7 +172,6 @@ if page == "Diário / Registo":
                 else:
                     novo = pd.DataFrame([{"Data": str(data_sel), "Utilizador": user, "Alimento": alimento_sel, "Qtd/Coef": qtd, **nutri}])
                     df_h = pd.concat([df_h, novo], ignore_index=True)
-                
                 if safe_update("Sheet1", df_h):
                     st.cache_data.clear(); st.rerun()
 
@@ -199,7 +185,6 @@ if page == "Diário / Registo":
                 dia_df.insert(0, "Sel.", False)
                 edited_df = st.data_editor(dia_df, hide_index=True, use_container_width=True, 
                                            column_config={"Sel.": st.column_config.CheckboxColumn(), "Data": None, "Utilizador": None})
-                
                 c1, c2 = st.columns(2)
                 if c1.button("✏️ Editar Selecionado", use_container_width=True):
                     sel = edited_df[edited_df["Sel."] == True]
@@ -208,12 +193,9 @@ if page == "Diário / Registo":
                         st.session_state.edit_mode, st.session_state.edit_index = True, idx
                         st.session_state.edit_alimento, st.session_state.edit_qtd = dia_df.at[idx, 'Alimento'], dia_df.at[idx, 'Qtd/Coef']
                         st.rerun()
-
                 if c2.button("🗑️ Apagar Selecionado", use_container_width=True):
                     indices = edited_df[edited_df["Sel."] == True].index
-                    if safe_update("Sheet1", df_h.drop(indices)):
-                        st.cache_data.clear(); st.rerun()
-
+                    if safe_update("Sheet1", df_h.drop(indices)): st.cache_data.clear(); st.rerun()
                 st.divider()
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("🔥 Kcal", f"{dia_df['Calorias'].sum():.0f}")
@@ -221,7 +203,6 @@ if page == "Diário / Registo":
                 m3.metric("🍞 Hidratos", f"{dia_df['Hidratos'].sum():.1f}g")
                 m4.metric("🍭 Açúcar", f"{dia_df['(açúcar)'].sum():.1f}g")
 
-# --- 6. PÁGINA: ESTATÍSTICAS ---
 elif page == "Estatísticas":
     st.header(f"📊 Estatísticas: {user}")
     df_h = get_data_sheets("Sheet1")
@@ -233,7 +214,6 @@ elif page == "Estatísticas":
             for c in cols: user_df[c] = pd.to_numeric(user_df[c], errors='coerce').fillna(0)
             diario = user_df.groupby(user_df['Data'].dt.date)[cols].sum().reset_index()
             diario['Data'] = pd.to_datetime(diario['Data'])
-            
             t1, t2 = st.tabs(["📅 Semanal", "📆 Mensal"])
             with t1:
                 u = diario.sort_values('Data', ascending=False).head(7)
@@ -252,7 +232,6 @@ elif page == "Estatísticas":
                 diario['Mês'] = diario['Data'].dt.strftime('%Y-%m')
                 st.dataframe(diario.groupby('Mês')[cols].mean(), use_container_width=True)
 
-# --- 7. PÁGINA: CÂMARA IA ---
 elif page == "Câmara IA":
     st.header("📸 Câmara IA")
     st.camera_input("Foto do alimento")
