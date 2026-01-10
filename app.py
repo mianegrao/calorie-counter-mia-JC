@@ -60,7 +60,7 @@ page = st.sidebar.selectbox("Ir para:", ["Diário / Registo", "Estatísticas", "
 if page == "Diário / Registo":
     st.header(f"📝 Diário de {user}")
     
-    # PROPORÇÕES AJUSTADAS: Coluna de registo maior (1.5) e tabela (2.0)
+    # Coluna de registo maior para facilitar leitura; Tabela com scroll à direita
     col_form, col_resumo = st.columns([1.5, 2.0], gap="large")
     
     with col_form:
@@ -78,7 +78,6 @@ if page == "Diário / Registo":
             def_q = st.session_state.edit_qtd if st.session_state.edit_mode else 1.0
             qtd = st.number_input("Quantidade / Coeficiente:", min_value=0.01, value=float(def_q), step=0.05)
             
-            # Cálculo de Nutrientes
             def get_v(names, q):
                 for n in names:
                     if n in row and pd.notnull(row[n]): return float(row[n]) * q
@@ -90,17 +89,14 @@ if page == "Diário / Registo":
                 "Hidratos": get_v(['Hidratos'], qtd),
                 "(açúcar)": get_v(['(açúcar)', 'Acucar'], qtd),
                 "Lípidos": get_v(['Lípidos', 'Lipidos'], qtd),
-                "(satur.)": get_v(['(satur.)', 'Saturadas'], qtd),
                 "Fibras": get_v(['Fibras', 'Fibra'], qtd),
                 "Sal": get_v(['Sal'], qtd)
             }
 
-            # Visualização clara dos valores antes de registar
             st.markdown(f"""
             **Resumo Nutricional:**
-            * 🔥 **{nutri['Calorias']:.1f}** Kcal
-            * 🥩 **{nutri['Proteína']:.1f}g** Proteína | 🍞 **{nutri['Hidratos']:.1f}g** Hidratos
-            * 🌾 **{nutri['Fibras']:.1f}g** Fibras | 🥑 **{nutri['Lípidos']:.1f}g** Lípidos
+            * 🔥 **{nutri['Calorias']:.1f}** Kcal | 🥩 **{nutri['Proteína']:.1f}g** Prot
+            * 🍭 **{nutri['(açúcar)']:.1f}g** Açúcar | 🌾 **{nutri['Fibras']:.1f}g** Fibras
             """)
 
             if st.session_state.edit_mode:
@@ -128,47 +124,44 @@ if page == "Diário / Registo":
             dia_df = df_h[(df_h['Data'] == str(data_sel)) & (df_h['Utilizador'] == user)].copy()
             
             if not dia_df.empty:
-                # Coluna de seleção para ações
                 dia_df.insert(0, "Sel.", False)
                 
-                # Barra de Ferramentas Compacta
                 c1, c2 = st.columns(2)
                 btn_edit = c1.button("✏️ Editar Selecionado", use_container_width=True)
                 btn_del = c2.button("🗑️ Apagar Selecionado", use_container_width=True)
 
-                # TABELA COM SCROLL LATERAL AUTOMÁTICO
-                # Mostra todos os nutrientes sem apertar a coluna da esquerda
+                # Tabela editável com todas as colunas disponíveis via scroll
                 edited_df = st.data_editor(
                     dia_df,
                     hide_index=True,
                     use_container_width=True,
                     column_config={
                         "Sel.": st.column_config.CheckboxColumn(required=True),
-                        "Data": None, "Utilizador": None # Oculta colunas desnecessárias
+                        "Data": None, "Utilizador": None
                     }
                 )
 
                 if btn_edit:
-                    sel_rows = edited_df[edited_df["Sel."] == True]
-                    if len(sel_rows) == 1:
-                        idx = sel_rows.index[0]
-                        st.session_state.edit_mode = True
-                        st.session_state.edit_index = idx
+                    sel = edited_df[edited_df["Sel."] == True]
+                    if len(sel) == 1:
+                        idx = sel.index[0]
+                        st.session_state.edit_mode, st.session_state.edit_index = True, idx
                         st.session_state.edit_alimento = dia_df.at[idx, 'Alimento']
                         st.session_state.edit_qtd = dia_df.at[idx, 'Qtd/Coef']
                         st.rerun()
-                    else: st.warning("Selecione apenas 1 item para editar.")
+                    else: st.warning("Selecione apenas 1 item.")
 
                 if btn_del:
-                    indices_finais = edited_df[edited_df["Sel."] == True].index
-                    if safe_update("Sheet1", df_h.drop(indices_finais)):
+                    indices = edited_df[edited_df["Sel."] == True].index
+                    if safe_update("Sheet1", df_h.drop(indices)):
                         st.cache_data.clear(); st.rerun()
 
                 st.divider()
-                # Métricas Rápidas
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Kcal", f"{dia_df['Calorias'].sum():.0f}")
-                m2.metric("Prot", f"{dia_df['Proteína'].sum():.1f}g")
-                m3.metric("Fibras", f"{dia_df['Fibras'].sum():.1f}g")
+                # MÉTRICAS TOTAIS COM AÇÚCAR INCLUÍDO
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("🔥 Kcal", f"{dia_df['Calorias'].sum():.0f}")
+                m2.metric("🥩 Prot", f"{dia_df['Proteína'].sum():.1f}g")
+                m3.metric("🍭 Açúcar", f"{dia_df['(açúcar)'].sum():.1f}g")
+                m4.metric("🌾 Fibras", f"{dia_df['Fibras'].sum():.1f}g")
             else:
-                st.info("Nenhum alimento registado para esta data.")
+                st.info("Nenhum registo para hoje.")
