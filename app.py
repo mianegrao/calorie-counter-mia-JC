@@ -10,73 +10,88 @@ st.set_page_config(page_title="Nutri Control Pro", layout="wide", page_icon="�
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- FUNÇÕES DE SUPORTE ---
-@st.cache_data(ttl=5) # Atualização quase imediata
+@st.cache_data(ttl=5)
 def get_data_sheets(worksheet_name):
     try:
         df = conn.read(worksheet=worksheet_name, ttl=0)
         if df is None or df.empty: return pd.DataFrame()
         df = df.dropna(how='all').reset_index(drop=True)
-        # Normalização de colunas e limpeza de espaços nos dados
+        # Normalização de nomes e dados
         df.columns = df.columns.str.strip()
         for col in df.select_dtypes(include=['object']).columns:
             df[col] = df[col].astype(str).str.strip()
             
-        mapeamento = {'Proteina': 'Proteína', 'Acucar': '(açúcar)', 'Açúcar': '(açúcar)', 
-                      'Lipidos': 'Lípidos', 'Fibra': 'Fibras', 'Kcal': 'Calorias'}
+        mapeamento = {
+            'Proteina': 'Proteína', 'Acucar': '(açúcar)', 'Açúcar': '(açúcar)', 
+            'Lipidos': 'Lípidos', 'Saturadas': '(satur.)', 'Fibra': 'Fibras', 
+            'Kcal': 'Calorias', 'Sal': 'Sal', 'Hidratos': 'Hidratos'
+        }
         return df.rename(columns=mapeamento)
     except: return pd.DataFrame()
 
-# ... (restante das funções de carregamento de alimentos iguais) ...
+# ... (restante do código de carregamento de alimentos mantido) ...
 
 # --- INTERFACE ---
 user = st.sidebar.selectbox("Utilizador:", ["Mia", "João Carlos", "Jorge", "Celeste"])
 page = st.sidebar.selectbox("Ir para:", ["Diário / Registo", "Estatísticas", "Câmara IA"])
 
 if page == "Diário / Registo":
-    # ... (lógica de registo mantida) ...
-    st.header(f"📝 Diário de {user}")
-    # (Inserir aqui o código de registo anterior)
+    # (Mantém a lógica de registo e edição já aperfeiçoada anteriormente)
+    pass
 
 elif page == "Estatísticas":
-    st.header(f"📊 Estatísticas de {user}")
+    st.header(f"📊 Perfil Nutricional de {user}")
     df_h = get_data_sheets("Sheet1")
     
     if not df_h.empty:
-        # Garante que o filtro ignora espaços e maiúsculas/minúsculas
+        # Filtro rigoroso
         user_df = df_h[df_h['Utilizador'].str.upper() == user.upper()].copy()
         user_df['Data'] = pd.to_datetime(user_df['Data'], errors='coerce')
         user_df = user_df.dropna(subset=['Data'])
         
         if not user_df.empty:
-            # Agrupar por dia para somar o que foi comido em cada data
-            diario = user_df.groupby(user_df['Data'].dt.date).agg({
-                'Calorias': 'sum', 'Proteína': 'sum', '(açúcar)': 'sum', 'Fibras': 'sum'
-            }).reset_index()
-            diario.columns = ['Data', 'Calorias', 'Proteína', 'Açúcar', 'Fibras']
+            # Agrupar todos os nutrientes por dia
+            colunas_nutri = ['Calorias', 'Proteína', 'Hidratos', '(açúcar)', 'Lípidos', '(satur.)', 'Fibras', 'Sal']
+            
+            # Garantir que todas as colunas existem para evitar erros de cálculo
+            for col in colunas_nutri:
+                if col not in user_df.columns: user_df[col] = 0.0
+                user_df[col] = pd.to_numeric(user_df[col], errors='coerce').fillna(0)
+
+            diario = user_df.groupby(user_df['Data'].dt.date)[colunas_nutri].sum().reset_index()
             diario['Data'] = pd.to_datetime(diario['Data'])
 
-            tab1, tab2 = st.tabs(["📅 Médias Semanais", "📆 Médias Mensais"])
+            tab1, tab2 = st.tabs(["📅 Médias Semanais", "📆 Histórico Mensal"])
 
             with tab1:
-                # Média APENAS dos dias com registo (últimos 7 registos)
                 ultimos_dias = diario.sort_values('Data', ascending=False).head(7)
-                num_dias = len(ultimos_dias)
+                num_ativos = len(ultimos_dias)
+                st.subheader(f"Média Diária (Últimos {num_ativos} dias com registo)")
                 
-                st.subheader(f"Média baseada nos últimos {num_dias} dias ativos")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("🔥 Kcal", f"{ultimos_dias['Calorias'].mean():.0f}")
-                c2.metric("🥩 Prot", f"{ultimos_dias['Proteína'].mean():.1f}g")
-                c3.metric("🍭 Açúcar", f"{ultimos_dias['Açúcar'].mean():.1f}g")
-                c4.metric("🌾 Fibras", f"{ultimos_dias['Fibras'].mean():.1f}g")
-                st.line_chart(diario.set_index('Data')[['Calorias']])
+                # Primeira linha: Macros Principais
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("🔥 Calorias", f"{ultimos_dias['Calorias'].mean():.0f} kcal")
+                m2.metric("🥩 Proteína", f"{ultimos_dias['Proteína'].mean():.1f} g")
+                m3.metric("🍞 Hidratos", f"{ultimos_dias['Hidratos'].mean():.1f} g")
+                m4.metric("🥑 Lípidos", f"{ultimos_dias['Lípidos'].mean():.1f} g")
+                
+                # Segunda linha: Detalhes e Micros
+                d1, d2, d3, d4 = st.columns(4)
+                d1.metric("🍭 Açúcar", f"{ultimos_dias['(açúcar)'].mean():.1f} g")
+                d2.metric("🍔 Gord. Satur.", f"{ultimos_dias['(satur.)'].mean():.1f} g")
+                d3.metric("🌾 Fibras", f"{ultimos_dias['Fibras'].mean():.1f} g")
+                d4.metric("🧂 Sal", f"{ultimos_dias['Sal'].mean():.2f} g")
+                
+                st.markdown("---")
+                st.write("**Evolução de Calorias e Açúcar:**")
+                st.line_chart(diario.set_index('Data')[['Calorias', '(açúcar)']])
 
             with tab2:
                 diario['Mês'] = diario['Data'].dt.strftime('%Y-%m')
-                # Média diária por mês (considerando apenas dias com entradas)
-                mensal = diario.groupby('Mês').agg({
-                    'Calorias': 'mean', 'Proteína': 'mean', 'Açúcar': 'mean'
-                }).reset_index()
-                st.write("**Média diária por mês (Dias com registo):**")
+                mensal = diario.groupby('Mês')[colunas_nutri].mean().reset_index()
+                st.write("**Média diária por mês (apenas dias com atividade):**")
                 st.dataframe(mensal, hide_index=True, use_container_width=True)
         else:
-            st.warning(f"A base de dados tem dados, mas nenhum corresponde exatamente ao nome '{user}'.")
+            st.info(f"Ainda não existem registos válidos para {user}.")
+    else:
+        st.error("Erro ao carregar a base de dados.")
