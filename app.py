@@ -26,6 +26,9 @@ def safe_update(worksheet, data):
     try:
         df_to_save = data.copy()
         if "Sel." in df_to_save.columns: df_to_save = df_to_save.drop(columns=["Sel."])
+        # Converte datas para string para evitar erros no Sheets
+        if 'Data' in df_to_save.columns:
+            df_to_save['Data'] = df_to_save['Data'].astype(str)
         conn.update(worksheet=worksheet, data=df_to_save)
         return True
     except: return False
@@ -55,7 +58,6 @@ df_alimentos = load_combined_food_data()
 # --- INTERFACE ---
 user = st.sidebar.selectbox("Utilizador:", ["Mia", "João Carlos", "Jorge", "Celeste"])
 data_sel = st.sidebar.date_input("Data:", date.today())
-# Removido Exercício conforme pedido
 page = st.sidebar.selectbox("Ir para:", ["Diário / Registo", "Estatísticas", "Câmara IA"])
 
 if page == "Diário / Registo":
@@ -115,14 +117,22 @@ if page == "Diário / Registo":
             if not dia_df.empty:
                 dia_df.insert(0, "Sel.", False)
                 c1, c2 = st.columns(2)
-                if c1.button("✏️ Editar Selecionado"):
-                    sel = st.session_state.get('edited_df', pd.DataFrame()) # Simplificado para brevidade
                 
                 edited_df = st.data_editor(dia_df, hide_index=True, use_container_width=True, 
                                            column_config={"Sel.": st.column_config.CheckboxColumn(), "Data": None, "Utilizador": None})
                 
-                # Lógica simplificada de botões para caber no exemplo
-                if c2.button("🗑️ Apagar"):
+                if c1.button("✏️ Editar Selecionado", use_container_width=True):
+                    sel_idx = edited_df[edited_df["Sel."] == True].index
+                    if len(sel_idx) == 1:
+                        idx = sel_idx[0]
+                        st.session_state.edit_mode = True
+                        st.session_state.edit_index = idx
+                        st.session_state.edit_alimento = dia_df.at[idx, 'Alimento']
+                        st.session_state.edit_qtd = dia_df.at[idx, 'Qtd/Coef'] if 'Qtd/Coef' in dia_df.columns else 1.0
+                        st.rerun()
+                    else: st.warning("Selecione apenas 1 item.")
+
+                if c2.button("🗑️ Apagar Selecionado", use_container_width=True):
                     indices = edited_df[edited_df["Sel."] == True].index
                     if safe_update("Sheet1", df_h.drop(indices)): st.cache_data.clear(); st.rerun()
 
@@ -138,11 +148,11 @@ elif page == "Estatísticas":
     df_h = get_data_sheets("Sheet1")
     
     if not df_h.empty:
-        df_h['Data'] = pd.to_datetime(df_h['Data'])
-        user_df = df_h[df_h['Utilizador'] == user].copy()
+        # CONVERSÃO SEGURA DE DATA
+        df_h['Data'] = pd.to_datetime(df_h['Data'], errors='coerce')
+        user_df = df_h[(df_h['Utilizador'] == user) & (df_h['Data'].notnull())].copy()
         
         if not user_df.empty:
-            # Agrupamento Diário primeiro
             diario = user_df.groupby('Data').agg({
                 'Calorias': 'sum', 'Proteína': 'sum', '(açúcar)': 'sum', 'Fibras': 'sum'
             }).reset_index()
@@ -150,24 +160,26 @@ elif page == "Estatísticas":
             tab1, tab2 = st.tabs(["📅 Semanal", "📆 Mensal"])
 
             with tab1:
-                st.subheader("Média dos Últimos 7 Dias")
-                last_week = diario[diario['Data'] >= pd.Timestamp(date.today() - timedelta(days=7))]
-                if not last_week.empty:
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Kcal Médias", f"{last_week['Calorias'].mean():.0f}")
-                    c2.metric("Prot Média", f"{last_week['Proteína'].mean():.1f}g")
-                    c3.metric("Açúcar Médio", f"{last_week['(açúcar)'].mean():.1f}g")
-                    c4.metric("Fibras Média", f"{last_week['Fibras'].mean():.1f}g")
-                    st.line_chart(last_week.set_index('Data')[['Calorias']])
-                else: st.info("Dados insuficientes para a última semana.")
+                st.subheader("Médias (Últimos 7 dias com registos)")
+                # Pega nos últimos 7 dias que têm dados
+                last_days = diario.sort_values('Data', ascending=False).head(7)
+                
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Kcal", f"{last_days['Calorias'].mean():.0f}")
+                c2.metric("Prot", f"{last_days['Proteína'].mean():.1f}g")
+                c3.metric("Açúcar", f"{last_days['(açúcar)'].mean():.1f}g")
+                c4.metric("Fibras", f"{last_days['Fibras'].mean():.1f}g")
+                
+                st.line_chart(diario.set_index('Data')[['Calorias']])
 
             with tab2:
-                st.subheader("Histórico Mensal")
-                diario['Mês'] = diario['Data'].dt.strftime('%Y-%m')
+                st.subheader("Médias Mensais")
+                diario['Mês'] = diario['Data'].dt.to_period('M').astype(str)
                 mensal = diario.groupby('Mês').agg({
-                    'Calorias': 'mean', 'Proteína': 'mean', '(açúcar)': 'sum'
+                    'Calorias': 'mean', 'Proteína': 'mean', '(açúcar)': 'mean', 'Fibras': 'mean'
                 }).reset_index()
-                st.dataframe(mensal, use_container_width=True)
+                
+                st.dataframe(mensal, use_container_width=True, hide_index=True)
                 st.bar_chart(mensal.set_index('Mês')[['Calorias']])
-        else: st.info("Sem dados para este utilizador.")
-    else: st.error("Não foi possível carregar os dados das estatísticas.")
+        else: st.info("Sem dados registados para este utilizador.")
+    else: st.error("A base de dados está vazia ou inacessível.")
