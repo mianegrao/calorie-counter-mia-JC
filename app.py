@@ -29,7 +29,7 @@ st.markdown("""
         font-size: 0.9rem;
         line-height: 1.5;
     }
-    .info-alimento b { color: #4CAF50; } /* Destaque para o título em verde */
+    .info-alimento b { color: #4CAF50; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -80,10 +80,15 @@ def load_combined_food_data():
 
 df_alimentos = load_combined_food_data()
 
-# --- 4. INTERFACE ---
+# --- 4. INTERFACE E BOTÃO RETROCEDER ---
 user = st.sidebar.selectbox("Utilizador:", ["Mia", "João Carlos", "Jorge", "Celeste"])
 data_sel = st.sidebar.date_input("Data:", date.today())
 page = st.sidebar.selectbox("Ir para:", ["Diário / Registo", "Estatísticas", "Câmara IA"])
+
+st.sidebar.divider()
+if st.sidebar.button("⬅️ Retroceder / Reset"):
+    st.session_state.update({"edit_mode": False, "edit_index": None, "edit_alimento": None, "edit_qtd": 1.0})
+    st.rerun()
 
 # --- 5. PÁGINA: DIÁRIO / REGISTO ---
 if page == "Diário / Registo":
@@ -129,7 +134,6 @@ if page == "Diário / Registo":
                 "Fibras": row.get('Fibras', 0) * qtd, "Sal": row.get('Sal', 0) * qtd
             }
             
-            # Caixa informativa com fundo escuro e letras brancas
             st.markdown(f"""
             <div class="info-alimento">
                 <b>RESUMO NUTRICIONAL:</b><br>
